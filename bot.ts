@@ -446,7 +446,7 @@ class Brain {
         }
       }
     }
-    const hunt = !this.ffa && t > 30
+    const hunt = !this.ffa && t > 20
     if (hunt !== this.huntLog) { this.huntLog = hunt; console.error(`t=${t.toFixed(1)} hunt=${hunt} ffa=${this.ffa} alive=${obs.alive} kills=${this.kills}`) }
     this.posHist.push({ t, p: pos.slice() })
     while (this.posHist.length && this.posHist[0].t < t - 1.2) this.posHist.shift()
