@@ -50,7 +50,8 @@ const V = { regen: true, grow: false }
 
 // lasers deal the most damage to us (38% in our final 10 s) and have the best burst: take one first
 // room games: laser games won (1st, 1st, 7th), lightning games lost (9th-14th): the laser is the weapon to have
-const WEAPON_RANK: Record<string, number> = { laser: 3, lightning: 2.0, mortar: 1.0, gun: 0 }
+// ambush: lightning (auto-aim, 240 dps inside 45 m) is the close-range burst weapon
+const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.8, mortar: 1.0, gun: 0 }
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
   "plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_damage", "gun_rate", "laser_charge",
@@ -485,7 +486,8 @@ class Brain {
         const attacking = t - (this.mechAttackers.get(e.id) ?? -99) < 4
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
-        if (this.ffa && !(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
+        // ambush: let hunters come to us; engage only inside 70 m or when they open fire
+        if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
@@ -658,7 +660,7 @@ class Brain {
       let want = 70
       // lightning only fires inside 45 m, but charging in to brawl got us killed: hold gun range unless the laser is ours
       if (lightIdx >= 0 && laserIdx >= 0 && me.energy > 25 && tDist < 50) want = 30
-      else if (lightIdx >= 0 && laserIdx < 0) want = 60
+      else if (lightIdx >= 0 && laserIdx < 0) want = 28
       else if (laserIdx >= 0) want = 95
       else if (mortarIdx >= 0) want = 85
       // gun only against a laser: our gun misses most shots at 80 m while the laser does not; close in
@@ -741,7 +743,7 @@ class Brain {
       let goal: number[] | null = null
       this.mode = "roam"
       if (!zoneOk) {
-        goal = (this.ffa ? this.homeGoal(obs, pos) : null) ?? this.zoneGoal(obs, pos)
+        goal = this.homeGoal(obs, pos) ?? this.zoneGoal(obs, pos)
         this.mode = "zone"
         if (!inZoneNow) boost = me.energy > 10
       }
@@ -811,7 +813,7 @@ class Brain {
         this.mode = "farm"
       }
       if (!goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
-        const hg = this.ffa ? this.homeGoal(obs, pos) : null
+        const hg = this.homeGoal(obs, pos)
         goal = hg ?? this.zoneGoal(obs, pos)
         if (hyp2(pos, goal) < (hg ? 2.5 : 25)) goal = null
         if (hg) this.mode = goal ? "home" : "hold"
@@ -832,7 +834,7 @@ class Brain {
     {
       const urgent = target != null || !zoneOk || t - this.lastDamageT < 5 || this.mode === "drop" || this.mode === "capture" ||
         (this.mode.startsWith("loot") && !slots[1])
-      if (this.ffa && !urgent && !boost) {
+      if (!urgent && !boost) {
         const quiet = ((this.cfg.sound?.step_speed ?? 5) * 0.9) / (me.stats.walk_speed ?? 11.7)
         const l = Math.hypot(mv[0], mv[1])
         if (l > quiet) mv = [(mv[0] / l) * quiet, (mv[1] / l) * quiet]
