@@ -100,8 +100,6 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
-  peekGoal: number[] | null = null
-  peekT = -99
   /** free-for-all detected (practice house bots never kill each other): switch to the hiding, ghost behaviour */
   ffa = false
   kills = 0
@@ -250,32 +248,6 @@ class Brain {
     else if (cur === Infinity) this.home = null
     this.homeT = obs.t
     return this.home
-  }
-
-  /** a spot within 30 m with a line of fire to the target that the other visible hostiles cannot see */
-  peekSpot(obs: Observation, me: V, target: ActorObs, others: ActorObs[]): number[] | null {
-    if (!this.map.ok || others.length === 0) return null
-    if (this.peekGoal && obs.t - this.peekT < 0.5) return this.peekGoal
-    const tz = target.pos[2] + 4.5 * (1 + 0.05 * (target.cubes ?? 0))
-    const eyes = others.slice(0, 4).map((o) => [o.pos[0], o.pos[1], o.pos[2] + 8 * (1 + 0.05 * (o.cubes ?? 0))])
-    const muz = (obs.self.stats.muzzle_height ?? 7)
-    let best: number[] | null = null, bs = Infinity
-    for (const r of [0, 8, 16, 24, 30]) {
-      for (let k = 0; k < (r === 0 ? 1 : 12); k++) {
-        const a = (k * TAU) / 12
-        const x = me[0] + Math.cos(a) * r, y = me[1] + Math.sin(a) * r
-        if (r > 0 && (this.map.clearAt(x, y) < 3 || !this.zoneSafe(obs, [x, y], 10))) continue
-        const gz = this.map.ground(x, y)
-        if (!this.map.los([x, y, gz + muz], [target.pos[0], target.pos[1], tz])) continue
-        let seen = 0
-        for (const e of eyes) if (this.map.los(e, [x, y, gz + 4.5]) || this.map.los(e, [x, y, gz + 9])) seen++
-        const sc = seen * 100 + r
-        if (sc < bs) { bs = sc; best = [x, y] }
-      }
-    }
-    this.peekGoal = best && bs < 100 ? best : null // only if it hides us from every other hostile
-    this.peekT = obs.t
-    return this.peekGoal
   }
 
   // ---------- navigation ----------
@@ -487,10 +459,8 @@ class Brain {
         if (this.ffa && !(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
       }
       const visible = losTo(e)
-      // focus fire: low HP and our current target first, so damage becomes kills instead of being spread
-      // across hunters that then regenerate
-      let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
-      if (e.id === this.targetId) s -= visible ? 60 : 25
+      let s = d + (e.hp ?? 1400) * 0.04 - (visible ? 40 : 0)
+      if (e.id === this.targetId) s -= 25
       if (canKill && visible) s -= 120 // finish what we can finish
       // is it aiming at us?
       const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
@@ -499,13 +469,15 @@ class Brain {
     }
     this.targetId = target ? target.id : -1
     if (V.regen) {
+      // retreat only when clearly losing: caution cost other bots 0.15-0.5 in practice
       let shooters = 0
       for (const e of enemies) {
         const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
-        if (Math.abs(wrap(toMe - e.aim[0])) < 0.3 && losTo(e)) shooters++
+        if (hyp2(pos, e.pos) < 230 && Math.abs(wrap(toMe - e.aim[0])) < 0.3 && losTo(e)) shooters++
       }
-      if (hpFrac < Math.min(0.75, 0.4 + 0.15 * Math.max(0, shooters - 1))) this.retreatMode = true
-      if (hpFrac > 0.85) this.retreatMode = false
+      const tFrac = target ? (target.hp ?? 1400) / (target.max_hp ?? 1400) : 1
+      if ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (shooters >= 2 && hpFrac < 0.55) || (shooters >= 3 && hpFrac < 0.8)) this.retreatMode = true
+      if (hpFrac > 0.85 || (t - this.lastDamageT > 8 && hpFrac > 0.6)) this.retreatMode = false
     }
     const tDist = target ? hyp2(pos, target.pos) : Infinity
     const tLos = target ? losTo(target) : false
@@ -660,7 +632,7 @@ class Brain {
       if (retreating) radial = -1
       if (t > this.strafeUntil) {
         this.strafeSign = this.rand() < 0.5 ? -1 : 1
-        this.strafeUntil = t + 0.8 + this.rand() * 1.6
+        this.strafeUntil = t + 0.3 + this.rand() * 0.5
       }
       const tx = -ry * this.strafeSign, ty = rx * this.strafeSign
       const sw = retreating ? 0.5 : 0.9
@@ -696,14 +668,8 @@ class Brain {
         const c = this.coverPoint(obs, pos, th, 30)
         if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
       }
-      // fight position: with more than one hostile around, fight from a spot only our target can see
-      if (!retreating && tLos) {
-        const others = enemies.filter((e) => e.id !== target.id && hyp2(pos, e.pos) < 200)
-        const spot = this.peekSpot(obs, pos, target, others)
-        if (spot && hyp2(pos, spot) > 2) { mv = this.navTo(obs, pos, spot, 1.0); this.mode = "peek" }
-      }
-      // dodge: an enemy is charging a laser at us; step behind cover a few metres away
-      if (!retreating) {
+      // dodge: an enemy is charging a laser at us; in free-for-all step behind cover a few metres away
+      if (!retreating && this.ffa) {
         for (const e of enemies) {
           if (!e.charging) continue
           const dE = hyp2(pos, e.pos)
@@ -810,10 +776,62 @@ class Brain {
     {
       const urgent = target != null || !zoneOk || t - this.lastDamageT < 5 || this.mode === "drop" || this.mode === "capture" ||
         (this.mode.startsWith("loot") && !slots[1])
-      if (!urgent && !boost) {
+      if (this.ffa && !urgent && !boost) {
         const quiet = ((this.cfg.sound?.step_speed ?? 5) * 0.9) / (me.stats.walk_speed ?? 11.7)
         const l = Math.hypot(mv[0], mv[1])
         if (l > quiet) mv = [(mv[0] / l) * quiet, (mv[1] / l) * quiet]
+      }
+    }
+    // dodge: sidestep bullets about to hit, leave mortar landing spots, step off a charging laser's line
+    {
+      let dx = 0, dy = 0, urgent = false
+      const sc = 1 + 0.05 * (me.cubes ?? 0)
+      const cz = pos[2] + 4.5 * sc
+      const g = (this.cfg.weapons?.mortar?.gravity as number) ?? 22
+      for (const p of obs.projectiles) {
+        const [px, py, pz] = p.pos, [vx, vy, vz] = p.vel
+        if (p.kind === "mortar") {
+          const a = -0.5 * g, b = vz, c = pz - pos[2]
+          const disc = b * b - 4 * a * c
+          if (disc < 0) continue
+          const tl = (-b - Math.sqrt(disc)) / (2 * a)
+          if (tl < 0 || tl > 3) continue
+          const lx = px + vx * tl, ly = py + vy * tl
+          if (Math.hypot(pos[0] + me.vel[0] * tl - lx, pos[1] + me.vel[1] * tl - ly) < 11) {
+            const l = Math.max(0.5, Math.hypot(pos[0] - lx, pos[1] - ly))
+            dx += (pos[0] - lx) / l; dy += (pos[1] - ly) / l; urgent = true
+          }
+          continue
+        }
+        const rx = pos[0] - px, ry = pos[1] - py, rz = cz - pz
+        const vv = vx * vx + vy * vy + vz * vz
+        if (vv < 1) continue
+        const tc = (rx * vx + ry * vy + rz * vz) / vv
+        if (tc < 0 || tc > 0.9) continue
+        const mx = px + vx * tc - pos[0], my = py + vy * tc - pos[1], mz = pz + vz * tc - cz
+        if (Math.hypot(mx, my, mz * 0.5) > 3.6 * sc) continue
+        const hv = Math.hypot(vx, vy) || 1
+        let nx = -vy / hv, ny = vx / hv
+        if (nx * -mx + ny * -my < 0) { nx = -nx; ny = -ny }
+        dx += nx; dy += ny; urgent = true
+      }
+      if (!this.ffa) {
+        for (const e of enemies) {
+          if (!e.charging) continue
+          const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
+          if (Math.abs(wrap(e.aim[0] - toMe)) > Math.max(0.06, Math.atan2(6, hyp2(pos, e.pos))) || !losTo(e)) continue
+          dx += -Math.sin(toMe) * this.strafeSign * 1.5; dy += Math.cos(toMe) * this.strafeSign * 1.5; urgent = true
+        }
+      }
+      if (urgent && this.mode !== "capture") {
+        const l = Math.hypot(dx, dy)
+        if (l > 0.01) {
+          mv = [mv[0] * 0.3 + (dx / l) * 0.95, mv[1] * 0.3 + (dy / l) * 0.95]
+          const ml = Math.hypot(mv[0], mv[1])
+          if (ml > 1) mv = [mv[0] / ml, mv[1] / ml]
+          if (me.energy > (lightIdx >= 0 && target ? 50 : 25)) boost = true
+          this.mode += "+dodge"
+        }
       }
     }
     mv = this.wallSafe(pos, mv)
