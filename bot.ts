@@ -492,6 +492,9 @@ class Brain {
       if (lightIdx >= 0 && me.energy > 25) want = 26
       else if (laserIdx >= 0) want = 95
       else if (mortarIdx >= 0) want = 85
+      // gun only against a laser: our gun misses most shots at 80 m while the laser does not; close in
+      const outgunned = laserIdx < 0 && lightIdx < 0 && (target.weapons ?? []).includes("laser")
+      if (outgunned) want = 30
       if (retreating) want = 400
       const [rx, ry] = norm2(target.pos[0] - pos[0], target.pos[1] - pos[1])
       let radial = 0
@@ -520,6 +523,16 @@ class Brain {
         mv = norm2(mv[0] * 0.6 + toZ[0] * 0.8, mv[1] * 0.6 + toZ[1] * 0.8)
         boost = me.energy > 15
       }
+      // gun only and the enemy is far and not hurting us: get a weapon first
+      if (!retreating && !slots[1] && tDist > 90 && t - this.lastDamageT > 3) {
+        const bp = this.bestPickup(obs, pos, 200)
+        if (bp) {
+          mv = this.navTo(obs, pos, bp.pos, 1.0)
+          this.mode = "loot " + bp.kind
+          if (hyp2(pos, bp.pos) < (this.cfg.loot.pickup_radius ?? 4) - 0.6 && Math.abs(bp.pos[2] - pos[2]) < 3.5) act.take = bp.id
+        }
+      }
+      if (outgunned && !retreating && tDist > 45 && me.energy > 30) boost = true
       // dodge: an enemy is charging a laser at us; step behind cover a few metres away
       if (!retreating) {
         for (const e of enemies) {
