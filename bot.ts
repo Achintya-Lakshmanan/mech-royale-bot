@@ -614,7 +614,7 @@ class Brain {
         const d = hyp2(pos, n.pos)
         const hittingUs = t - (this.droneAttackers.get(n.id) ?? -99) < 4
         const dd = hittingUs ? d - 60 : d // prefer the drone that is shooting us
-        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && !healing && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
+        if (d < (hittingUs ? 100 : hunt ? 150 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && (hunt ? hpFrac > 0.5 : !healing) && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -699,7 +699,7 @@ class Brain {
     }
 
     // crates when idle
-    if (!shootAt && !this.retreatMode && !healing) {
+    if (!shootAt && !this.retreatMode && (hunt ? hpFrac > 0.5 : !healing)) {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
       for (const c of obs.crates) {
         const d = hyp2(pos, c.pos)
