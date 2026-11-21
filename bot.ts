@@ -262,6 +262,8 @@ class Brain {
     const kinds = slots.map((w) => (w ? w.kind : null))
     const has = (k: string) => kinds.includes(k as never)
     const hpFrac = me.hp / me.max_hp
+    // after a fight, let HP regenerate (5 s without dealing damage) before shooting drones or crates
+    const healing = hpFrac < 0.85
 
     // ---- bookkeeping ----
     for (const ev of obs.events) {
@@ -347,7 +349,7 @@ class Brain {
       let bn: ActorObs | null = null, bd = Infinity
       for (const n of npcs) {
         const d = hyp2(pos, n.pos)
-        if (d < (V.grow ? 110 : 70) && d < bd && hpFrac > 0.45 && !this.retreatMode && losTo(n)) { bd = d; bn = n }
+        if (d < (V.grow ? 110 : 70) && d < bd && !healing && !this.retreatMode && losTo(n)) { bd = d; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -411,7 +413,7 @@ class Brain {
     }
 
     // crates when idle
-    if (!shootAt && !this.retreatMode) {
+    if (!shootAt && !this.retreatMode && !healing) {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
       for (const c of obs.crates) {
         const d = hyp2(pos, c.pos)
