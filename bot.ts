@@ -65,6 +65,8 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
+  /** weapon pickups we have seen (the observation lists them only while visible) */
+  knownPickups = new Map<number, { id: number; kind: string; pos: number[] }>()
   coverGoal: number[] | null = null
   coverT = -99
 
@@ -143,6 +145,26 @@ class Brain {
     this.coverGoal = best
     this.coverT = obs.t
     return best
+  }
+
+  /** best weapon pickup to go for, from memory; null if none worth it */
+  bestPickup(obs: Observation, pos: V, maxD: number) {
+    const slots = obs.self.weapons
+    const has = (k: string) => slots.some((w) => w && w.kind === k)
+    const myWorst = slots[1] ? WEAPON_RANK[slots[1].kind] ?? 0 : -1
+    let bp: { id: number; kind: string; pos: number[] } | null = null, bs = -Infinity
+    for (const p of this.knownPickups.values()) {
+      if (has(p.kind)) continue
+      const r = WEAPON_RANK[p.kind] ?? 0
+      if (r <= myWorst + 0.3) continue
+      const d = hyp2(pos, p.pos)
+      const onRoof = p.pos[2] - this.map.ground(p.pos[0], p.pos[1]) > 3
+      if (onRoof && d > 6) continue
+      if (d > maxD || !this.zoneSafe(obs, p.pos, 5)) continue
+      const sc = r * 30 - d
+      if (sc > bs) { bs = sc; bp = p }
+    }
+    return bp
   }
 
   // ---------- navigation ----------
@@ -275,12 +297,19 @@ class Brain {
         }
       }
       if (ev.type === "take_failed" || ev.type === "took") this.path = null
+      if (ev.type === "took" || (ev.type === "take_failed" && (ev.reason === "gone" || ev.reason === "have"))) this.knownPickups.delete(ev.id)
     }
     for (const s of obs.sounds) {
       if (["gun", "laser", "lightning", "laser_charge", "mortar", "step", "boost", "jet"].includes(s.kind) && s.dist !== "far") {
         this.heardBearing = s.bearing
         this.heardT = t
       }
+    }
+    {
+      const vis = new Set<number>()
+      for (const p of obs.pickups) { vis.add(p.id); this.knownPickups.set(p.id, { id: p.id, kind: p.kind, pos: p.pos.slice() }) }
+      // a remembered pickup close by that we no longer see has been taken
+      for (const [id, p] of this.knownPickups) if (!vis.has(id) && hyp2(pos, p.pos) < 25) this.knownPickups.delete(id)
     }
     this.posHist.push({ t, p: pos.slice() })
     while (this.posHist.length && this.posHist[0].t < t - 1.2) this.posHist.shift()
@@ -523,21 +552,9 @@ class Brain {
           }
         }
       }
-      // weapon pickups
+      // weapon pickups: with only the gun, a second weapon is worth a long walk
       if (!goal && this.mode !== "capture") {
-        const myWorst = slots[1] ? WEAPON_RANK[slots[1].kind] ?? 0 : -1
-        let bp: (typeof obs.pickups)[number] | null = null, bs = -Infinity
-        for (const p of obs.pickups) {
-          if (has(p.kind)) continue
-          const r = WEAPON_RANK[p.kind] ?? 0
-          if (r <= myWorst + 0.3) continue
-          const d = hyp2(pos, p.pos)
-          const onRoof = p.pos[2] - this.map.ground(p.pos[0], p.pos[1]) > 3
-          if (onRoof && d > 6) continue
-          if (d > (V.grow ? 200 : 130) || !this.zoneSafe(obs, p.pos, 5)) continue
-          const s = r * 30 - d
-          if (s > bs) { bs = s; bp = p }
-        }
+        const bp = this.bestPickup(obs, pos, slots[1] ? 130 : 260)
         if (bp) {
           const d = hyp2(pos, bp.pos)
           if (d < (this.cfg.loot.pickup_radius ?? 4) - 0.6 && Math.abs(bp.pos[2] - pos[2]) < 3.5) {
@@ -545,7 +562,8 @@ class Brain {
             if (slots[1]) act.drop = 1
           }
           goal = [bp.pos[0], bp.pos[1]]
-          this.mode = `loot ${bp.kind}`
+          this.mode = "loot " + bp.kind
+          if (!slots[1] && d > 30 && me.energy > 40) boost = true
         }
       }
       // cubes
