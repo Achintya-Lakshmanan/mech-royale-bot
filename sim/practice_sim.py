@@ -10,6 +10,11 @@ weapon, shoot only drones that attack them), or with --defend-s N fight back for
 
 Prints each game's place and the mean of 16 - place (the practice score), and appends one JSON line per game to
 <out>/results.jsonl (kills, death time, activation times, hunter deaths and their causes, hunter hit rates).
+
+Calibration (2026-11-21, see sim/calibrate.py --pool): the defaults (--alive-per-kill 0, passive, --noise-scale 1,
+intel unseen 8 s +-20 m) fit best: example 1.25 (real 1.15), fe5cfb6 3.9 (2.69), cc22d2d 4.75 (4.81), but per-game
+spread is large (SD 2-5: a bot can massacre passive hunters late), so 8 games only separate differences of ~2 points.
+Settings tried: K=1 (too hard: 1.0/1.0/2.0), K=0 noise 1.25 (too easy: 1.75/4.6/7.0), --defend-s 6 (too hard).
 """
 import argparse, asyncio, gzip, json, math, os, random, secrets, ssl, sys, time, urllib.request
 
