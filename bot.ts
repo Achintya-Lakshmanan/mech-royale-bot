@@ -100,6 +100,8 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
+  peekGoal: number[] | null = null
+  peekT = -99
   /** free-for-all detected (practice house bots never kill each other): switch to the hiding, ghost behaviour */
   ffa = false
   kills = 0
@@ -248,6 +250,32 @@ class Brain {
     else if (cur === Infinity) this.home = null
     this.homeT = obs.t
     return this.home
+  }
+
+  /** a spot within 30 m with a line of fire to the target that the other visible hostiles cannot see */
+  peekSpot(obs: Observation, me: V, target: ActorObs, others: ActorObs[]): number[] | null {
+    if (!this.map.ok || others.length === 0) return null
+    if (this.peekGoal && obs.t - this.peekT < 0.5) return this.peekGoal
+    const tz = target.pos[2] + 4.5 * (1 + 0.05 * (target.cubes ?? 0))
+    const eyes = others.slice(0, 4).map((o) => [o.pos[0], o.pos[1], o.pos[2] + 8 * (1 + 0.05 * (o.cubes ?? 0))])
+    const muz = (obs.self.stats.muzzle_height ?? 7)
+    let best: number[] | null = null, bs = Infinity
+    for (const r of [0, 8, 16, 24, 30]) {
+      for (let k = 0; k < (r === 0 ? 1 : 12); k++) {
+        const a = (k * TAU) / 12
+        const x = me[0] + Math.cos(a) * r, y = me[1] + Math.sin(a) * r
+        if (r > 0 && (this.map.clearAt(x, y) < 3 || !this.zoneSafe(obs, [x, y], 10))) continue
+        const gz = this.map.ground(x, y)
+        if (!this.map.los([x, y, gz + muz], [target.pos[0], target.pos[1], tz])) continue
+        let seen = 0
+        for (const e of eyes) if (this.map.los(e, [x, y, gz + 4.5]) || this.map.los(e, [x, y, gz + 9])) seen++
+        const sc = seen * 100 + r
+        if (sc < bs) { bs = sc; best = [x, y] }
+      }
+    }
+    this.peekGoal = best && bs < 100 ? best : null // only if it hides us from every other hostile
+    this.peekT = obs.t
+    return this.peekGoal
   }
 
   // ---------- navigation ----------
@@ -459,8 +487,8 @@ class Brain {
         if (this.ffa && !(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
       }
       const visible = losTo(e)
-      let s = d + (e.hp ?? 1400) * 0.04 - (visible ? 40 : 0)
-      if (e.id === this.targetId) s -= 25
+      let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
+      if (e.id === this.targetId) s -= visible ? 60 : 25
       if (canKill && visible) s -= 120 // finish what we can finish
       // is it aiming at us?
       const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
@@ -518,6 +546,15 @@ class Brain {
       const a = this.aimPoint(me, shootAt, gs?.speed ?? 252)
       aimYaw = a.yaw
       aimPitch = a.pitch
+      // hitscan aim for the laser: current position plus ~0.1 s of motion
+      const hit = (() => {
+        const lead = { ...shootAt, pos: [shootAt.pos[0] + shootAt.vel[0] * 0.1, shootAt.pos[1] + shootAt.vel[1] * 0.1, shootAt.pos[2]] } as ActorObs
+        return this.aimPoint(me, lead, 1e9)
+      })()
+      const lw = laserIdx >= 0 ? slots[laserIdx]! : null
+      const lightClose = lightIdx >= 0 && a.dist < 40
+      const laserActive = !!lw && !lightClose && ((lw.charge ?? 0) > 0 || ((lw.cooldown ?? 0) <= 0.1 && a.dist < ((lw.stats as Record<string, number>).range ?? 280) * 0.95))
+      if (laserActive) { aimYaw = hit.yaw; aimPitch = hit.pitch }
       haveAim = true
       const los = shootAt === target ? tLos : true
       const size = shootAt.kind === "mech" ? 2.2 * (1 + 0.05 * (shootAt.cubes ?? 0)) : 1.6
@@ -539,7 +576,7 @@ class Brain {
         const ls = w.stats as Record<string, number>
         const charge = w.charge ?? 0
         const full = (ls.charge ?? 0.75) * 0.97
-        const aligned = aimErrOk(a.yaw, a.pitch, a.dist, size * 0.9)
+        const aligned = aimErrOk(hit.yaw, hit.pitch, hit.dist, size * 0.9)
         if (a.dist < (ls.range ?? 280) * 0.95 && (los || charge > 0)) {
           if (charge > 0) {
             // keep holding until full and aligned and visible
@@ -668,6 +705,12 @@ class Brain {
         const c = this.coverPoint(obs, pos, th, 30)
         if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
       }
+      // fight position: with more than one hostile around, fight from a spot only our target can see
+      if (!retreating && tLos) {
+        const others = enemies.filter((e) => e.id !== target.id && hyp2(pos, e.pos) < 200)
+        const spot = this.peekSpot(obs, pos, target, others)
+        if (spot && hyp2(pos, spot) > 2) { mv = this.navTo(obs, pos, spot, 1.0); this.mode = "peek" }
+      }
       // dodge: an enemy is charging a laser at us; in free-for-all step behind cover a few metres away
       if (!retreating && this.ffa) {
         for (const e of enemies) {
@@ -712,6 +755,16 @@ class Brain {
             break
           }
         }
+      }
+      // nearby cubes first: a kill drops all the victim's cubes plus two (+4% HP and damage each)
+      if (!goal && this.mode !== "capture") {
+        let bc: number[] | null = null, bd = Infinity
+        for (const c of obs.cubes) {
+          const d = hyp2(pos, c.pos)
+          if (d > 60 || c.pos[2] - this.map.ground(c.pos[0], c.pos[1]) > 3 || !this.zoneSafe(obs, c.pos, 5)) continue
+          if (d < bd) { bd = d; bc = c.pos }
+        }
+        if (bc) { goal = [bc[0], bc[1]]; this.mode = "cube"; if (bd > 15 && me.energy > 40) boost = true }
       }
       // weapon pickups: with only the gun, a second weapon is worth a long walk
       if (!goal && this.mode !== "capture") {
