@@ -686,6 +686,17 @@ class Brain {
       draw.line(muzzle, a.pt, shootAt.kind === "mech" ? "#ff5040" : "#ffa040")
     }
 
+    // practice: regen discipline. HP regenerates 45/s only after 5 s without dealing or taking damage, so while hurt and
+    // nobody is hitting us, hold fire on mechs that are not fighting us (unless we can finish them)
+    if (hunt && shootAt && shootAt.kind === "mech" && hpFrac < 0.6 && t - this.lastDamageT > 2 &&
+        t - (this.mechAttackers.get(shootAt.id) ?? -99) > 4 && !killable(shootAt)) {
+      for (let i = 0; i < fire.length; i++) {
+        const w = slots[i]
+        fire[i] = !!w && w.kind === "laser" && (w.charge ?? 0) > 0 // keep holding a started laser charge; release nothing
+      }
+      this.mode += "+regen"
+    }
+
     // crates when idle
     if (!shootAt && !this.retreatMode && !healing) {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
