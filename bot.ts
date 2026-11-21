@@ -19,10 +19,11 @@ const norm2 = (x: number, y: number): [number, number] => {
 /** experiment switches: regen = disengage to cover and heal; grow = farm drones/crates/cubes more widely */
 const V = { regen: true, grow: false }
 
-const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.6, mortar: 1.4, gun: 0 }
+// burst ranking from recorded matches: laser > lightning >> mortar
+const WEAPON_RANK: Record<string, number> = { laser: 3, lightning: 2.8, mortar: 1.0, gun: 0 }
 const UPGRADE_RANK = [
-  "armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "laser_damage", "laser_charge",
-  "nanites", "gyros", "lightning_range", "gun_mag", "servos", "capacitor", "reactor", "gun_velocity",
+  "gun_rate", "gun_damage", "laser_damage", "lightning_efficiency", "laser_charge", "armor", "plating",
+  "gyros", "nanites", "lightning_range", "gun_mag", "servos", "capacitor", "reactor", "gun_velocity",
   "jets", "sensors", "mortar_reload", "lightning_chain", "mortar_splash", "mortar_velocity", "laser_pierce",
 ]
 
@@ -310,7 +311,7 @@ class Brain {
     for (const e of enemies) {
       const d = hyp2(pos, e.pos)
       const visible = losTo(e)
-      let s = d + (e.hp ?? 1400) * 0.04 - (visible ? 40 : 0)
+      let s = d + (e.hp ?? 1400) * 0.08 - (visible ? 60 : 0)
       if (e.id === this.targetId) s -= 25
       // is it aiming at us?
       const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
@@ -396,7 +397,9 @@ class Brain {
         const w = slots[mortarIdx]!
         const tp: V = [shootAt.pos[0], shootAt.pos[1], shootAt.pos[2] + 1]
         const sol = this.mortarAim(me, tp, shootAt.vel, !tLos)
-        if (sol && (w.cooldown ?? 0) <= 0.05) {
+        const tSpeed = Math.hypot(shootAt.vel[0], shootAt.vel[1])
+        const mortarGood = !tLos || tSpeed < 3 || shootAt.charging === true
+        if (sol && mortarGood && (w.cooldown ?? 0) <= 0.05) {
           // mortar takes over aim only if gun not usable
           const gunBusy = gunIdx < 0 || (slots[gunIdx]!.reload ?? 0) > 0 || !tLos
           if (gunBusy || (w.cooldown ?? 0) <= 0.0) {
