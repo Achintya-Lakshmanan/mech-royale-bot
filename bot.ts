@@ -123,13 +123,14 @@ class Brain {
   }
 
   /** a nearby walkable, zone-safe point the threat cannot see */
-  coverPoint(obs: Observation, me: V, threat: ActorObs): number[] | null {
+  coverPoint(obs: Observation, me: V, threat: ActorObs, maxR = 55): number[] | null {
     if (!this.map.ok) return null
-    if (this.coverGoal && obs.t - this.coverT < 1.0) return this.coverGoal
+    if (this.coverGoal && obs.t - this.coverT < 1.0 && hyp2(me, this.coverGoal) <= maxR + 3) return this.coverGoal
     const sc = 1 + 0.05 * (threat.cubes ?? 0)
     const te = [threat.pos[0], threat.pos[1], threat.pos[2] + 8 * sc]
     let best: number[] | null = null, bs = -Infinity
-    for (const r of [10, 18, 28, 40, 55]) {
+    for (const r of [6, 10, 18, 28, 40, 55]) {
+      if (r > maxR) break
       for (let k = 0; k < 16; k++) {
         const a = (k * TAU) / 16
         const x = me[0] + Math.cos(a) * r, y = me[1] + Math.sin(a) * r
@@ -518,6 +519,18 @@ class Brain {
         const toZ = this.navTo(obs, pos, zg, 10)
         mv = norm2(mv[0] * 0.6 + toZ[0] * 0.8, mv[1] * 0.6 + toZ[1] * 0.8)
         boost = me.energy > 15
+      }
+      // dodge: an enemy is charging a laser at us; step behind cover a few metres away
+      if (!retreating) {
+        for (const e of enemies) {
+          if (!e.charging) continue
+          const dE = hyp2(pos, e.pos)
+          const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
+          if (Math.abs(wrap(toMe - e.aim[0])) > Math.max(0.08, Math.atan2(5, dE)) || !losTo(e)) continue
+          const c = this.coverPoint(obs, pos, e, 12)
+          if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "dodge" }
+          break
+        }
       }
       // stay inside the zone
       if (!zoneOk) {
