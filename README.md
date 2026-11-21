@@ -7,3 +7,5 @@ A TypeScript bot for the Builders Buildathon *Mech Royale* track (`mechfight/1` 
 - **mechfight.ts** is the kit's protocol wrapper, unchanged.
 
 Check locally (from the kit folder): `python3 check/check.py -- node /path/to/bot.ts`
+
+Team notes, data sources and analysis tools: see `docs/NOTES.md`.
