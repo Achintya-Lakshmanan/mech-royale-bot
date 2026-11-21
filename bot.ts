@@ -51,7 +51,7 @@ const V = { regen: true, grow: false }
 // lasers deal the most damage to us (38% in our final 10 s) and have the best burst: take one first
 // room games: laser games won (1st, 1st, 7th), lightning games lost (9th-14th): the laser is the weapon to have
 // ambush: lightning (auto-aim, 240 dps inside 45 m) is the close-range burst weapon
-const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.8, mortar: -1, gun: 0 }
+const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.8, mortar: 3.5, gun: 0 }
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
   "plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_damage", "gun_rate", "laser_charge",
