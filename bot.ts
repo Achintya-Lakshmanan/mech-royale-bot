@@ -65,6 +65,8 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
+  /** NPC drones that shot us recently: id -> time */
+  droneAttackers = new Map<number, number>()
   /** weapon pickups we have seen (the observation lists them only while visible) */
   knownPickups = new Map<number, { id: number; kind: string; pos: number[] }>()
   coverGoal: number[] | null = null
@@ -291,6 +293,7 @@ class Brain {
     // ---- bookkeeping ----
     for (const ev of obs.events) {
       if (ev.type === "damaged") {
+        if (ev.by != null && ev.by >= 100) this.droneAttackers.set(ev.by, t)
         if (ev.weapon !== "zone") this.lastDamageT = t
         if (ev.bearing != null && ev.weapon !== "zone") {
           this.threatBearing = ev.bearing
@@ -379,7 +382,9 @@ class Brain {
       let bn: ActorObs | null = null, bd = Infinity
       for (const n of npcs) {
         const d = hyp2(pos, n.pos)
-        if (d < (V.grow ? 110 : 70) && d < bd && !healing && !this.retreatMode && losTo(n)) { bd = d; bn = n }
+        const hittingUs = t - (this.droneAttackers.get(n.id) ?? -99) < 4
+        const dd = hittingUs ? d - 60 : d // prefer the drone that is shooting us
+        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!healing && !this.retreatMode)) && losTo(n)) { bd = dd; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
