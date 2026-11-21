@@ -566,6 +566,8 @@ class Brain {
       if (hunt) {
         s -= (1 - (e.hp ?? 1400) / (e.max_hp ?? 1400)) * 150 // finish the hurt ones
         if (Math.abs(wrap(toMe - e.aim[0])) > Math.PI / 2 + 0.1) s -= 40 // its back is to us: x1.5 damage
+        // an idle hunter (not shooting at or aiming at us) is a free kill, and it never joins the hunt later
+        if (t - (this.mechAttackers.get(e.id) ?? -99) > 4 && Math.abs(wrap(toMe - e.aim[0])) > 0.3) s -= 80
       }
       if (s < bestScore) { bestScore = s; target = e }
     }
