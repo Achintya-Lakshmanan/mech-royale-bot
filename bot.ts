@@ -52,6 +52,12 @@ const V = { regen: true, grow: false }
 // room games: laser games won (1st, 1st, 7th), lightning games lost (9th-14th): the laser is the weapon to have
 // ambush: lightning (auto-aim, 240 dps inside 45 m) is the close-range burst weapon
 const WEAPON_RANK: Record<string, number> = { lightning: 2.8, laser: 3.2, mortar: -1, gun: 0 }
+// practice: plating and armor first, then the laser
+const SQUAD_UPGRADES = [
+  "plating", "armor", "laser_damage", "laser_charge", "nanites", "gun_damage", "gun_rate", "lightning_efficiency", "lightning_range",
+  "servos", "gun_mag", "gun_velocity", "gyros", "lightning_chain", "reactor", "capacitor", "mortar_reload", "mortar_splash",
+  "mortar_velocity", "sensors", "jets", "laser_pierce",
+]
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
   "laser_damage", "plating", "laser_charge", "armor", "lightning_efficiency", "nanites", "gun_damage", "gun_rate",
@@ -120,6 +126,8 @@ class Brain {
   coverGoal: number[] | null = null
   coverT = -99
 
+  stickT = -99
+  loseT = -99
   constructor(hello: Hello) {
     this.cfg = hello.config
     this.rand = rng(hello.seed ^ 0x9e3779b9)
@@ -446,7 +454,7 @@ class Brain {
         }
       }
     }
-    const hunt = !this.ffa && t > 30
+    const hunt = !this.ffa && t > 20
     if (hunt !== this.huntLog) { this.huntLog = hunt; console.error(`t=${t.toFixed(1)} hunt=${hunt} ffa=${this.ffa} alive=${obs.alive} kills=${this.kills}`) }
     this.posHist.push({ t, p: pos.slice() })
     while (this.posHist.length && this.posHist[0].t < t - 1.2) this.posHist.shift()
@@ -455,7 +463,7 @@ class Brain {
     if (obs.offer) {
       let bi = 0, br = 1e9
       obs.offer.choices.forEach((c, i) => {
-        const r = UPGRADE_RANK.indexOf(c.id)
+        const r = (hunt ? SQUAD_UPGRADES : UPGRADE_RANK).indexOf(c.id)
         const rr = r < 0 ? 50 : r
         if (rr < br) { br = rr; bi = i }
       })
@@ -543,7 +551,31 @@ class Brain {
     const killable = (e: ActorObs) => (e.hp ?? 1400) <= burstAt(hyp2(pos, e.pos))
     let target: ActorObs | null = null
     let bestScore = Infinity
-    for (const e of enemies) {
+    const late = obs.zone.next_radius <= 70 || obs.alive <= 3
+    const closingSpeed = (e: ActorObs) => {
+      const [ux, uy] = norm2(pos[0] - e.pos[0], pos[1] - e.pos[1])
+      return e.vel[0] * ux + e.vel[1] * uy
+    }
+    if (hunt) {
+      // practice (squad): fight whatever is coming for us, aiming at us, hurting us or already hurt; finish the weak first
+      for (const e of enemies) {
+        const d = hyp2(pos, e.pos)
+        if (d > 240 || !losTo(e)) continue
+        const hitUs = t - (this.mechAttackers.get(e.id) ?? -99)
+        const aimed = Math.abs(wrap(Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0]) - e.aim[0])) < 0.22
+        const hp = e.hp ?? 1400, mhp = e.max_hp ?? 1400
+        const closing = closingSpeed(e) > 3
+        if (!(d < 60 || hitUs < 6 || late || (closing && d < 180) || (hp < 0.4 * mhp && d < 160) || (aimed && d < 190))) continue
+        let s = d + 0.1 * hp
+        if (hp <= 0.3 * mhp) s -= 400
+        if (e.id === this.targetId && t - this.stickT < 2) s -= 200
+        if (hitUs < 4) s -= 40
+        if (closing) s -= 15
+        if (s < bestScore) { bestScore = s; target = e }
+      }
+      if (target) this.stickT = t
+    }
+    for (const e of hunt ? [] : enemies) {
       const d = hyp2(pos, e.pos)
       const canKill = killable(e) && d < 150
       // ghost: leave far mechs alone unless they are fighting us, about to laser us, or nearly dead
@@ -568,8 +600,20 @@ class Brain {
       }
       if (s < bestScore) { bestScore = s; target = e }
     }
-    this.targetId = target ? target.id : -1
-    if (V.regen) {
+    if (target || !hunt) this.targetId = target ? target.id : -1
+    if (V.regen && hunt) {
+      // practice: back off only while clearly losing, and only briefly (1.5 s after the last losing moment)
+      let near = 0
+      for (const e of enemies) if (hyp2(pos, e.pos) < 160) near++
+      let losing = (near >= 2 && hpFrac < 0.55) || (near >= 3 && hpFrac < 0.8)
+      if (target) {
+        const tf = (target.hp ?? 1400) / (target.max_hp ?? 1400)
+        if (hpFrac < 0.35 && tf > hpFrac + 0.1) losing = true
+        if (tf < 0.25 && hpFrac > 0.2 && near <= 2) losing = false
+      }
+      if (losing) this.loseT = t
+      this.retreatMode = this.loseT > 0 && t - this.loseT < 1.5
+    } else if (V.regen) {
       // retreat only when clearly losing: caution cost other bots 0.15-0.5 in practice
       let shooters = 0
       for (const e of enemies) {
@@ -614,7 +658,7 @@ class Brain {
         const d = hyp2(pos, n.pos)
         const hittingUs = t - (this.droneAttackers.get(n.id) ?? -99) < 4
         const dd = hittingUs ? d - 60 : d // prefer the drone that is shooting us
-        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && !healing && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
+        if (d < (hittingUs ? 100 : hunt ? 150 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && (hunt ? hpFrac > 0.5 : !healing) && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -637,7 +681,7 @@ class Brain {
       const los = shootAt === target ? tLos : true
       const size = shootAt.kind === "mech" ? 2.2 * (1 + 0.05 * (shootAt.cubes ?? 0)) : 1.6
       // gun
-      if (gunIdx >= 0 && los && a.dist < Math.min(120, (gs?.range ?? 230) * 0.95)) { // no long-range gunfire: it misses and gives us away
+      if (gunIdx >= 0 && los && a.dist < Math.min(hunt ? 1e9 : 120, (gs?.range ?? 230) * 0.95)) { // no long-range gunfire: it misses and gives us away
         const w = slots[gunIdx]!
         if ((w.reload ?? 0) <= 0 && (w.ammo ?? 1) > 0 && aimErrOk(a.yaw, a.pitch, a.dist, size)) fire[gunIdx] = true
       }
@@ -655,7 +699,11 @@ class Brain {
         const charge = w.charge ?? 0
         const full = (ls.charge ?? 0.75) * 0.97
         const aligned = aimErrOk(hit.yaw, hit.pitch, hit.dist, size * 0.9)
-        if (a.dist < (ls.range ?? 280) * 0.95 && (los || charge > 0)) {
+        const minC = ls.min_charge ?? 0.15, minF = ls.min_frac ?? 0.35
+        const partial = (ls.damage ?? 315) * (minF + (1 - minF) * Math.min(1, charge / (ls.charge ?? 0.75))) * myScale
+        if (hunt && shootAt.kind === "mech" && los && charge >= minC && charge < full && partial * 0.7 >= (shootAt.hp ?? 1400) && aligned) {
+          fire[laserIdx] = false
+        } else if (a.dist < (ls.range ?? 280) * 0.95 && (los || charge > 0)) {
           if (charge > 0) {
             // keep holding until full and aligned and visible
             fire[laserIdx] = !(charge >= full && aligned && los)
@@ -688,7 +736,7 @@ class Brain {
 
     // practice: regen discipline. HP regenerates 45/s only after 5 s without dealing or taking damage, so while hurt and
     // nobody is hitting us, hold fire on mechs that are not fighting us (unless we can finish them)
-    if (hunt && shootAt && shootAt.kind === "mech" && hpFrac < 0.6 && t - this.lastDamageT > 2 &&
+    if (false && hunt && shootAt && shootAt.kind === "mech" && hpFrac < 0.6 && t - this.lastDamageT > 2 &&
         t - (this.mechAttackers.get(shootAt.id) ?? -99) > 15 && !killable(shootAt) &&
         Math.abs(wrap(Math.atan2(pos[1] - shootAt.pos[1], pos[0] - shootAt.pos[0]) - shootAt.aim[0])) > 0.3) {
       for (let i = 0; i < fire.length; i++) {
@@ -699,7 +747,7 @@ class Brain {
     }
 
     // crates when idle
-    if (!shootAt && !this.retreatMode && !healing) {
+    if (!shootAt && !this.retreatMode && (hunt ? hpFrac > 0.5 : !healing)) {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
       for (const c of obs.crates) {
         const d = hyp2(pos, c.pos)
@@ -737,7 +785,7 @@ class Brain {
     let retreating = target != null && (hpFrac < 0.3 || (hpFrac < 0.45 && (target.hp ?? 0) > me.hp * 1.3))
     if (V.regen && target) {
       // heal behind cover, unless the enemy is nearly dead and in our sights
-      retreating = this.retreatMode && !(tLos && ((target.hp ?? 1400) < me.hp * 0.5 || killable(target)))
+      retreating = this.retreatMode && !(tLos && ((target.hp ?? 1400) < me.hp * 0.5 || killable(target) || (hunt && tDist < 120 && (target.hp ?? 1400) < 200)))
       // regen needs 5 s without dealing damage: hold fire unless we are in contact
       if (retreating && !tLos) { fire[0] = false; fire[1] = false }
     }
@@ -752,14 +800,22 @@ class Brain {
       else if (mortarIdx >= 0) want = 85
       // gun only against a laser: our gun misses most shots at 80 m while the laser does not; close in
       const outgunned = laserIdx < 0 && lightIdx < 0 && (target.weapons ?? []).includes("laser")
-      if (outgunned) want = 30
+      if (outgunned && !hunt) want = 30
+      if (hunt) {
+        want = lightIdx >= 0 && me.energy > 12 ? 28 : laserIdx >= 0 ? 120 : 85
+        if (lightIdx < 0 && (target.weapons ?? []).includes("lightning")) want = Math.max(want, 64)
+        let crowd = 0
+        for (const e of enemies) if (losTo(e) && hyp2(pos, e.pos) < 150) crowd++
+        // finish: close right in on a weak target
+        if ((target.hp ?? 1400) < 0.38 * (target.max_hp ?? 1400) && hpFrac > 0.42 && crowd <= 2) { want = 20; this.mode = "fight+finish" }
+      }
       if (retreating) want = 400
       const [rx, ry] = norm2(target.pos[0] - pos[0], target.pos[1] - pos[1])
       let radial = 0
       if (tDist > want + 12) radial = 1
       else if (tDist < want - 12) radial = -1
       if (retreating) radial = -1
-      if (hunt && !retreating && tLos) {
+      if (false && hunt && !retreating && tLos) {
         const fo = fightOdds(target)
         if (fo.p > 0.75 && fo.ourTTK < 2.5 && tDist > 25) { radial = 1; if (me.energy > 30) boost = true; this.mode = "fight+finish" }
       }
@@ -819,6 +875,14 @@ class Brain {
           break
         }
       }
+      if (hunt && !retreating) {
+        let r = hpFrac <= 0.5 ? 40 : 70, bc: number[] | null = null
+        for (const c of obs.cubes) {
+          const d = hyp2(pos, c.pos)
+          if (d < r && Math.abs(c.pos[2] - pos[2]) < 4) { r = d; bc = c.pos }
+        }
+        if (bc) { mv = this.navTo(obs, pos, bc, 0.5); this.mode = "fight:cube" }
+      }
       // stay inside the zone
       if (!zoneOk) {
         const zg = this.zoneGoal(obs, pos)
@@ -864,7 +928,7 @@ class Brain {
       }
       // weapon pickups: with only the gun, a second weapon is worth a long walk
       if (!goal && this.mode !== "capture") {
-        const bp = this.bestPickup(obs, pos, slots[1] ? 130 : 260)
+        const bp = this.bestPickup(obs, pos, slots[1] ? (hunt && laserIdx < 0 ? 240 : 130) : 260)
         if (bp) {
           const d = hyp2(pos, bp.pos)
           if (d < (this.cfg.loot.pickup_radius ?? 4) - 0.6 && Math.abs(bp.pos[2] - pos[2]) < 3.5) {
@@ -882,7 +946,7 @@ class Brain {
         for (const c of obs.cubes) {
           const d = hyp2(pos, c.pos)
           const onRoof = c.pos[2] - this.map.ground(c.pos[0], c.pos[1]) > 3
-          if (onRoof || d > (V.grow ? 160 : 90) || !this.zoneSafe(obs, c.pos, 5)) continue
+          if (onRoof || d > (V.grow ? 160 : hunt ? 105 : 90) || !this.zoneSafe(obs, c.pos, 5)) continue
           if (d < bd) { bd = d; bc = c }
         }
         if (bc) { goal = [bc.pos[0], bc.pos[1]]; this.mode = "cube" }
