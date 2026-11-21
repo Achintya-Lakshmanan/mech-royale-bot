@@ -53,7 +53,7 @@ async def play_game(n, args, ctx):
     clients = [Client(0, args.bot, dict(os.environ), args.name)]
     clients[0].sid = host_sid
     for i, sg in enumerate(TIERS):
-        env = dict(os.environ, HUNTER_SIGMA_DEG=str(sg))
+        env = dict(os.environ, HUNTER_SIGMA_DEG=str(sg * args.noise_scale))
         clients.append(Client(i + 1, ["bun", os.path.join(HERE, "hunter.ts")], env, f"hunter{i + 1}"))
     state = {"t": 0.0, "kills": 0, "target": None, "pos": None, "seen_t": -99.0, "intel_t": -99.0,
              "active": set(), "started": False, "done": False, "result": None}
@@ -61,9 +61,9 @@ async def play_game(n, args, ctx):
 
     def update_active():
         want = 0
-        if state["t"] >= 20:
-            want = 1 + 2 * state["kills"]
-        if state["t"] >= 240:
+        if state["t"] >= args.first_join:
+            want = 1 + args.per_kill * state["kills"]
+        if state["t"] >= args.all_at:
             want = 15
         alive = [c.idx for c in clients[1:] if not c.dead]
         for i in order:
@@ -126,7 +126,7 @@ async def play_game(n, args, ctx):
                                 if e.get("type") == "kill":
                                     state["kills"] += 1
                             # squad position intel every 8 s
-                            if m["t"] - state["intel_t"] >= 8:
+                            if m["t"] - state["intel_t"] >= args.intel_period:
                                 state["pos"] = m["self"]["pos"]
                                 state["intel_t"] = m["t"]
                             await c.feed(raw if isinstance(raw, str) else raw.decode())
@@ -158,6 +158,24 @@ async def play_game(n, args, ctx):
                     pass
 
     print(f"game {n}: room {room} code {code}", flush=True)
+
+    async def record():
+        path = os.path.join(args.out, f"psim-{int(time.time())}-{n}.jsonl.gz")
+        q = f"token=&sid={host_sid}&name=rec&code={code}"
+        try:
+            async with websockets.connect(f"wss://{HOST}/r/{room}/live?{q}", ssl=ctx, max_size=None, proxy=True, open_timeout=30) as ws:
+                with gzip.open(path, "wt") as f:
+                    while not state["done"]:
+                        try:
+                            m = await asyncio.wait_for(ws.recv(), 2)
+                        except asyncio.TimeoutError:
+                            continue
+                        for line in str(m).split("\n"):
+                            if line.strip():
+                                f.write(f'{{"_rt":{time.time():.2f},"d":{line}}}\n')
+        except Exception as e:
+            print(f"recorder: {repr(e)[:100]}", file=sys.stderr)
+    rec_task = asyncio.create_task(record()) if args.record else None
     tasks = [asyncio.create_task(run_client(clients[0]))]
     await asyncio.sleep(2)  # the test bot joins first and is the host
     for c in clients[1:]:
@@ -168,7 +186,7 @@ async def play_game(n, args, ctx):
         await asyncio.sleep(1)
     state["done"] = True
     await asyncio.sleep(2)
-    for tk in tasks:
+    for tk in tasks + ([rec_task] if rec_task else []):
         tk.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     return state["result"]
@@ -181,6 +199,12 @@ async def main():
     ap.add_argument("--games", type=int, default=1)
     ap.add_argument("--name", default="test")
     ap.add_argument("--timeout", type=float, default=600)
+    ap.add_argument("--first-join", type=float, default=20)
+    ap.add_argument("--per-kill", type=int, default=2)
+    ap.add_argument("--all-at", type=float, default=240)
+    ap.add_argument("--intel-period", type=float, default=8)
+    ap.add_argument("--noise-scale", type=float, default=1.0)
+    ap.add_argument("--record", action="store_true", help="save a spectator replay of each game")
     ap.add_argument("bot", nargs=argparse.REMAINDER)
     args = ap.parse_args()
     args.bot = [a for a in args.bot if a != "--"]
