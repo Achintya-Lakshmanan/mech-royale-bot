@@ -1,0 +1,101 @@
+"""Calibrate the practice simulator against real practice scores.
+
+For every submitted commit with a known practice score, rebuild the bot the way that commit's Dockerfile does (same
+files, same entrypoint), play N simulated practice games, and compare simulated with real scores (rank correlation,
+mean error). Squad settings are passed through to sim/practice_sim.py.
+
+    python3 sim/calibrate.py --arena <kit>/arena --work /tmp/calib --games 6 --parallel 2 [--first-join 20 ...]
+"""
+import argparse, json, os, re, subprocess, sys, statistics as st
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+# commit -> real practice score (from the submissions page)
+REAL = {
+    "734a0cf": 3.29, "fe5cfb6": 2.69, "fc21aee": 3.21, "3693d2f": 3.71, "dec7233": 3.90, "0111c47": 4.54,
+    "588ec6a": 3.92, "0d85ce7": 4.60, "6c86f03": 3.73, "c2c6bf8": 3.63, "36cd38c": 4.77, "f64f13c": 4.02,
+    "e31a64e": 3.94,
+}
+
+
+def export(commit, work):
+    """copy the files the commit's Dockerfile copies into work/<commit>/ and return the command to run the bot"""
+    d = os.path.join(work, commit)
+    os.makedirs(d, exist_ok=True)
+    df = subprocess.check_output(["git", "-C", REPO, "show", f"{commit}:Dockerfile"], text=True)
+    for line in df.splitlines():
+        m = re.match(r"\s*COPY\s+(.+)\s+(\S+)\s*$", line)
+        if not m:
+            continue
+        for src in m.group(1).split():
+            data = subprocess.check_output(["git", "-C", REPO, "show", f"{commit}:{src}"])
+            open(os.path.join(d, os.path.basename(src)), "wb").write(data)
+    ep = re.search(r"ENTRYPOINT\s*\[(.*)\]", df).group(1)
+    cmd = [x.strip().strip('"') for x in ep.split(",")]
+    return [c.replace("/bot/", d + "/") for c in cmd]
+
+
+def spearman(a, b):
+    def ranks(x):
+        order = sorted(range(len(x)), key=lambda i: x[i])
+        r = [0.0] * len(x)
+        for k, i in enumerate(order):
+            r[i] = k
+        return r
+    ra, rb = ranks(a), ranks(b)
+    ma, mb = st.mean(ra), st.mean(rb)
+    num = sum((x - ma) * (y - mb) for x, y in zip(ra, rb))
+    den = (sum((x - ma) ** 2 for x in ra) * sum((y - mb) ** 2 for y in rb)) ** 0.5
+    return num / den if den else 0.0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--arena", required=True)
+    ap.add_argument("--work", required=True)
+    ap.add_argument("--games", type=int, default=6)
+    ap.add_argument("--parallel", type=int, default=2)
+    ap.add_argument("--only", default="", help="comma-separated commits to run (default: all)")
+    ap.add_argument("simargs", nargs=argparse.REMAINDER, help="extra args for practice_sim.py, after --")
+    a = ap.parse_args()
+    extra = [x for x in a.simargs if x != "--"]
+    commits = [c for c in REAL if not a.only or c in a.only.split(",")]
+    procs = []
+    os.makedirs(a.work, exist_ok=True)
+    tag = "_".join(extra).replace("--", "").replace(" ", "") or "default"
+    for c in commits:
+        cmd = export(c, a.work)
+        out = os.path.join(a.work, f"res-{tag}", c)
+        os.makedirs(out, exist_ok=True)
+        argv = [sys.executable, "-I", os.path.join(HERE, "practice_sim.py"), "--arena", a.arena, "--out", out,
+                "--games", str(a.games), "--name", f"cal{c}"] + extra + ["--"] + cmd
+        procs.append((c, argv, out))
+    running = []
+    while procs or running:
+        while procs and len(running) < a.parallel:
+            c, argv, out = procs.pop(0)
+            log = open(os.path.join(out, "log.txt"), "w")
+            running.append((c, subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT), out))
+        for item in list(running):
+            if item[1].poll() is not None:
+                running.remove(item)
+        import time
+        time.sleep(5)
+    rows = []
+    for c in commits:
+        f = os.path.join(a.work, f"res-{tag}", c, "results.jsonl")
+        pl = [json.loads(l)["place"] for l in open(f)] if os.path.exists(f) else []
+        if pl:
+            rows.append((c, REAL[c], st.mean(16 - p for p in pl), len(pl)))
+    rows.sort(key=lambda r: -r[1])
+    print(f"settings: {tag}")
+    print(f"{'commit':9}{'real':>6}{'sim':>7}{'games':>6}")
+    for c, r, s, n in rows:
+        print(f"{c:9}{r:6.2f}{s:7.2f}{n:6}")
+    if len(rows) >= 3:
+        real = [r[1] for r in rows]; sim = [r[2] for r in rows]
+        print(f"rank correlation {spearman(real, sim):.2f}  mean abs error {st.mean(abs(x - y) for x, y in zip(real, sim)):.2f}")
+
+
+if __name__ == "__main__":
+    main()
