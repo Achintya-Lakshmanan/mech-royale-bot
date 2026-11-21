@@ -582,6 +582,7 @@ class Brain {
         const fo = fightOdds(target)
         if (fo.p < 0.25 && fo.ourTTK > 1.2) this.retreatMode = true
         if (fo.p > 0.6 && hpFrac > 0.5) this.retreatMode = false
+        if (shooters >= 2 && hpFrac < 0.7 && !killable(target)) this.retreatMode = true // two hunters on us: break off, one at a time
       } else if ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (shooters >= 2 && hpFrac < 0.55) || (shooters >= 3 && hpFrac < 0.8)) this.retreatMode = true
       if (hpFrac > 0.85 || (t - this.lastDamageT > 8 && hpFrac > 0.6)) this.retreatMode = false
     }
