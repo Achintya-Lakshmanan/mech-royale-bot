@@ -659,7 +659,7 @@ class Brain {
       // lightning only fires inside 45 m, but charging in to brawl got us killed: hold gun range unless the laser is ours
       if (lightIdx >= 0 && laserIdx >= 0 && me.energy > 25 && tDist < 50) want = 30
       else if (lightIdx >= 0 && laserIdx < 0) want = 60
-      else if (laserIdx >= 0) want = 180 // sniper: house aim spreads at range, our laser is instant and exact
+      else if (laserIdx >= 0) want = 220 // sniper: house aim spreads at range, our laser is instant and exact
       else if (mortarIdx >= 0) want = 85
       // gun only against a laser: our gun misses most shots at 80 m while the laser does not; close in
       const outgunned = laserIdx < 0 && lightIdx < 0 && (target.weapons ?? []).includes("laser")
@@ -671,7 +671,7 @@ class Brain {
       if (tDist > want + 12) radial = 1
       else if (tDist < want - 12) radial = -1
       // sniper: never let a hunter close in; back away (boosting) while the laser recharges
-      const kite = laserIdx >= 0 && tDist < 130 && !finishingNow
+      const kite = laserIdx >= 0 && tDist < 160 && !finishingNow
       if (kite) { radial = -1; if (me.energy > 30) boost = true }
       if (retreating) radial = -1
       if (t > this.strafeUntil) {
