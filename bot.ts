@@ -52,6 +52,11 @@ const V = { regen: true, grow: false }
 // room games: laser games won (1st, 1st, 7th), lightning games lost (9th-14th): the laser is the weapon to have
 // ambush: lightning (auto-aim, 240 dps inside 45 m) is the close-range burst weapon
 const WEAPON_RANK: Record<string, number> = { lightning: 2.8, laser: 3.2, mortar: -1, gun: 0 }
+const SQUAD_UPGRADES = [
+  "plating", "armor", "laser_damage", "laser_charge", "nanites", "gun_damage", "gun_rate", "lightning_efficiency", "lightning_range",
+  "servos", "gun_mag", "gun_velocity", "gyros", "lightning_chain", "reactor", "capacitor", "mortar_reload", "mortar_splash",
+  "mortar_velocity", "sensors", "jets", "laser_pierce",
+]
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
   "laser_damage", "plating", "laser_charge", "armor", "lightning_efficiency", "nanites", "gun_damage", "gun_rate",
@@ -455,7 +460,7 @@ class Brain {
     if (obs.offer) {
       let bi = 0, br = 1e9
       obs.offer.choices.forEach((c, i) => {
-        const r = UPGRADE_RANK.indexOf(c.id)
+        const r = (hunt ? SQUAD_UPGRADES : UPGRADE_RANK).indexOf(c.id)
         const rr = r < 0 ? 50 : r
         if (rr < br) { br = rr; bi = i }
       })
