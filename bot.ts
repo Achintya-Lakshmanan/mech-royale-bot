@@ -389,7 +389,7 @@ class Brain {
   // ---------- main ----------
   act(obs: Observation): Omit<Action, "tick"> {
     // farm then fight: collect cubes widely for the first 2 minutes, then play normally
-    V.grow = obs.t < 120
+    V.grow = obs.t < 90
     const me = obs.self
     const pos = me.pos
     const t = obs.t
@@ -487,7 +487,7 @@ class Brain {
         const attacking = t - (this.mechAttackers.get(e.id) ?? -99) < 4
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
-        if ((this.ffa || obs.t < 120) && !(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
+        if ((this.ffa || obs.t < 90) && !(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
