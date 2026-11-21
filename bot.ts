@@ -659,7 +659,7 @@ class Brain {
       // lightning only fires inside 45 m, but charging in to brawl got us killed: hold gun range unless the laser is ours
       if (lightIdx >= 0 && laserIdx >= 0 && me.energy > 25 && tDist < 50) want = 30
       else if (lightIdx >= 0 && laserIdx < 0) want = 60
-      else if (laserIdx >= 0) want = 95
+      else if (laserIdx >= 0) want = 130 // weaker hunters stop hitting at ~145 m; our laser reaches 280 m
       else if (mortarIdx >= 0) want = 85
       // gun only against a laser: our gun misses most shots at 80 m while the laser does not; close in
       const outgunned = laserIdx < 0 && lightIdx < 0 && (target.weapons ?? []).includes("laser")
