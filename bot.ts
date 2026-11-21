@@ -858,7 +858,7 @@ class Brain {
         if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
       }
       // fight position: with more than one hostile around, fight from a spot only our target can see
-      if (!retreating && tLos) {
+      if (!retreating && tLos && !hunt) {
         const others = enemies.filter((e) => e.id !== target.id && hyp2(pos, e.pos) < 200)
         const spot = this.peekSpot(obs, pos, target, others)
         if (spot && hyp2(pos, spot) > 2) { mv = this.navTo(obs, pos, spot, 1.0); this.mode = "peek" }
