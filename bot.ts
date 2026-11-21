@@ -50,9 +50,10 @@ const V = { regen: true, grow: false }
 
 const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.6, mortar: 1.4, gun: 0 }
 const UPGRADE_RANK = [
-  "armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "laser_damage", "laser_charge",
-  "nanites", "gyros", "lightning_range", "gun_mag", "servos", "capacitor", "reactor", "gun_velocity",
-  "jets", "sensors", "mortar_reload", "lightning_chain", "mortar_splash", "mortar_velocity", "laser_pierce",
+  // survival first (as the 4.1+ bots do), then damage
+  "plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_damage", "gun_rate", "laser_charge",
+  "gyros", "lightning_range", "gun_mag", "capacitor", "reactor", "servos", "sensors", "gun_velocity",
+  "jets", "mortar_reload", "lightning_chain", "mortar_splash", "mortar_velocity", "laser_pierce",
 ]
 
 // mulberry32
@@ -465,7 +466,7 @@ class Brain {
         const d = hyp2(pos, n.pos)
         const hittingUs = t - (this.droneAttackers.get(n.id) ?? -99) < 4
         const dd = hittingUs ? d - 60 : d // prefer the drone that is shooting us
-        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!healing && !this.retreatMode)) && losTo(n)) { bd = dd; bn = n }
+        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && hittingUs /* ghost: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
