@@ -547,7 +547,7 @@ class Brain {
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
         // ambush: let hunters come to us; engage only inside 70 m or when they open fire
-        if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120) || (hunt && d < 130 && losTo(e) && fightOdds(e).p > 0.7))) continue
+        if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120) || (hunt && d < 160 && losTo(e) && fightOdds(e).p > 0.6))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
@@ -574,7 +574,7 @@ class Brain {
       if (hunt && target) {
         // practice: leave fights we are losing unless we can finish the target first; come back when the odds turn
         const fo = fightOdds(target)
-        if (fo.p < 0.3 && fo.ourTTK > 1.2) this.retreatMode = true
+        if (fo.p < 0.25 && fo.ourTTK > 1.2) this.retreatMode = true
         if (fo.p > 0.6 && hpFrac > 0.5) this.retreatMode = false
       } else if ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (shooters >= 2 && hpFrac < 0.55) || (shooters >= 3 && hpFrac < 0.8)) this.retreatMode = true
       if (hpFrac > 0.85 || (t - this.lastDamageT > 8 && hpFrac > 0.6)) this.retreatMode = false
