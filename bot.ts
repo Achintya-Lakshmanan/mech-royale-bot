@@ -100,6 +100,9 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
+  /** free-for-all detected (practice house bots never kill each other): switch to the hiding, ghost behaviour */
+  ffa = false
+  kills = 0
   /** NPC drones that shot us recently: id -> time */
   droneAttackers = new Map<number, number>()
   /** mechs that damaged us: id -> time */
@@ -383,6 +386,7 @@ class Brain {
         }
       }
       if (ev.type === "take_failed" || ev.type === "took") this.path = null
+      if (ev.type === "kill") this.kills++
       if (ev.type === "took" || (ev.type === "take_failed" && (ev.reason === "gone" || ev.reason === "have"))) this.knownPickups.delete(ev.id)
     }
     for (const s of obs.sounds) {
@@ -397,6 +401,8 @@ class Brain {
       // a remembered pickup close by that we no longer see has been taken
       for (const [id, p] of this.knownPickups) if (!vis.has(id) && hyp2(pos, p.pos) < 25) this.knownPickups.delete(id)
     }
+    // more mechs died than we killed (plus one for zone or drone deaths): the others are fighting each other
+    if (!this.ffa && (this.cfg.match.mechs ?? 16) - obs.alive > this.kills + 1) this.ffa = true
     this.posHist.push({ t, p: pos.slice() })
     while (this.posHist.length && this.posHist[0].t < t - 1.2) this.posHist.shift()
 
@@ -450,7 +456,7 @@ class Brain {
         const attacking = t - (this.mechAttackers.get(e.id) ?? -99) < 4
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
-        if (!(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
+        if (this.ffa && !(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.04 - (visible ? 40 : 0)
@@ -495,7 +501,7 @@ class Brain {
         const d = hyp2(pos, n.pos)
         const hittingUs = t - (this.droneAttackers.get(n.id) ?? -99) < 4
         const dd = hittingUs ? d - 60 : d // prefer the drone that is shooting us
-        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && hittingUs /* ghost: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
+        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && !healing && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -682,7 +688,7 @@ class Brain {
       let goal: number[] | null = null
       this.mode = "roam"
       if (!zoneOk) {
-        goal = this.homeGoal(obs, pos) ?? this.zoneGoal(obs, pos)
+        goal = (this.ffa ? this.homeGoal(obs, pos) : null) ?? this.zoneGoal(obs, pos)
         this.mode = "zone"
         if (!inZoneNow) boost = me.energy > 10
       }
@@ -742,7 +748,7 @@ class Brain {
         this.mode = "farm"
       }
       if (!goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
-        const hg = this.homeGoal(obs, pos)
+        const hg = this.ffa ? this.homeGoal(obs, pos) : null
         goal = hg ?? this.zoneGoal(obs, pos)
         if (hyp2(pos, goal) < (hg ? 2.5 : 25)) goal = null
         if (hg) this.mode = goal ? "home" : "hold"
@@ -816,7 +822,7 @@ class Brain {
     act.aim = [wrap(aimYaw), clamp(aimPitch, this.cfg.mech.min_pitch ?? -0.7, this.cfg.mech.max_pitch ?? 1.3)]
     act.fire = fire
 
-    draw.label(`${this.mode} hp${Math.round(me.hp)} e${Math.round(me.energy)} ${target ? "T" + target.id : ""}`)
+    draw.label(`${this.ffa ? "ffa " : ""}${this.mode} hp${Math.round(me.hp)} e${Math.round(me.energy)} ${target ? "T" + target.id : ""}`)
     return act
   }
 }
