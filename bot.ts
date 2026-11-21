@@ -794,6 +794,13 @@ class Brain {
           if (hyp2(pos, bp.pos) < (this.cfg.loot.pickup_radius ?? 4) - 0.6 && Math.abs(bp.pos[2] - pos[2]) < 3.5) act.take = bp.id
         }
       }
+      // pick up cubes within 25 m mid-fight (kills drop the victim's cubes plus two)
+      if (!retreating) for (const c of obs.cubes) {
+        if (hyp2(pos, c.pos) < 25 && c.pos[2] - this.map.ground(c.pos[0], c.pos[1]) < 3 && this.zoneSafe(obs, c.pos, 5)) {
+          const [cx, cy] = norm2(c.pos[0] - pos[0], c.pos[1] - pos[1])
+          mv = norm2(mv[0] * 0.4 + cx, mv[1] * 0.4 + cy); this.mode = "fight+cube"; break
+        }
+      }
       if (outgunned && !retreating && tDist > 45 && me.energy > 30) boost = true
       // a laser is picking us off from range and we have no laser: break its line of sight (next shot is ~2.4 s away)
       if (!retreating && t < this.losBreakUntil) {
