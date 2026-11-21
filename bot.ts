@@ -898,7 +898,7 @@ class Brain {
           const d = hyp2(pos, m.pos)
           if (t - ts < 15 && d < bd && this.zoneSafe(obs, m.pos, 5)) { bd = d; best = m.pos }
         }
-        if (false && best && bd > 30) { goal = [best[0], best[1]]; this.mode = "hunt" }
+        if (best && bd > 30 && hpFrac > 0.7) { goal = [best[0], best[1]]; this.mode = "hunt" }
       }
       if (!goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
         const hg = this.homeGoal(obs, pos)
