@@ -49,7 +49,8 @@ const norm2 = (x: number, y: number): [number, number] => {
 const V = { regen: true, grow: false }
 
 // lasers deal the most damage to us (38% in our final 10 s) and have the best burst: take one first
-const WEAPON_RANK: Record<string, number> = { laser: 3, lightning: 2.8, mortar: 1.0, gun: 0 }
+// room games: laser games won (1st, 1st, 7th), lightning games lost (9th-14th): the laser is the weapon to have
+const WEAPON_RANK: Record<string, number> = { laser: 3, lightning: 2.0, mortar: 1.0, gun: 0 }
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
   "plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_damage", "gun_rate", "laser_charge",
@@ -655,7 +656,9 @@ class Brain {
       this.mode = retreating ? "retreat" : "fight"
       // preferred range depends on weapons
       let want = 70
-      if (lightIdx >= 0 && me.energy > 25) want = 26
+      // lightning only fires inside 45 m, but charging in to brawl got us killed: hold gun range unless the laser is ours
+      if (lightIdx >= 0 && laserIdx >= 0 && me.energy > 25 && tDist < 50) want = 30
+      else if (lightIdx >= 0 && laserIdx < 0) want = 60
       else if (laserIdx >= 0) want = 95
       else if (mortarIdx >= 0) want = 85
       // gun only against a laser: our gun misses most shots at 80 m while the laser does not; close in
@@ -732,7 +735,7 @@ class Brain {
       }
       // avoid charging when laser user is near and we are fighting from range
       if (!retreating && tDist > want + 40 && me.energy > 50 && (lightIdx < 0 || tDist > 60)) boost = true
-      if (lightIdx >= 0 && tDist < 70 && tDist > 30 && me.energy > 60 && !retreating) boost = true
+      // (no boosting in to lightning range: brawls lost us games)
     } else {
       // no visible mech
       let goal: number[] | null = null
