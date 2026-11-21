@@ -98,7 +98,7 @@ async def play_game(n, args, ctx, rnd):
             clients.append(Client(hi, ["bun", os.path.join(HERE, "hunter.ts")], env, f"hunter{hi}", TIER_NAMES[ti], lo))
             hi += 1
     st = {"t": 0.0, "kills": [], "target": None, "pos": None, "true_pos": None, "seen_t": -99.0, "intel_t": -99.0,
-          "active": {}, "started": False, "result": None, "kill_targets": set()}
+          "active": {}, "started": False, "result": None, "kill_targets": set(), "dmg": {}}
     done = asyncio.Event()
     order = list(range(1, 16))  # weakest first
 
@@ -216,6 +216,10 @@ async def play_game(n, args, ctx, rnd):
                             if e.get("type") == "kill":
                                 st["kills"].append(round(t, 1))
                                 st["kill_targets"].add(e.get("target"))
+                            elif e.get("type") == "damaged":  # damage the test bot took, by attacker tier and weapon
+                                hc = next((h for h in clients[1:] if h.slot is not None and h.slot == e.get("by")), None)
+                                k = f"{hc.tier if hc else 'other'}/{e.get('weapon')}"
+                                st["dmg"][k] = round(st["dmg"].get(k, 0) + (e.get("amount") or 0))
                         st["true_pos"] = m["self"]["pos"]
                         update_intel()
                         await c.feed(raw if isinstance(raw, str) else raw.decode())
@@ -259,7 +263,7 @@ async def play_game(n, args, ctx, rnd):
             except Exception:
                 pass
 
-    print(f"game {n}: room {room} code {code}", flush=True)
+    print(f"{time.strftime('%H:%M:%S')} game {n}: room {room} code {code}", flush=True)
 
     async def record():
         path = os.path.join(args.out, f"psim-{int(time.time())}-{n}.jsonl.gz")
@@ -290,6 +294,9 @@ async def play_game(n, args, ctx, rnd):
     while not done.is_set():
         if time.time() - t0 > args.timeout:
             aborted = "timeout"
+            break
+        if tasks[0].done():
+            aborted = "test bot disconnected"
             break
         if not st["started"] and time.time() - t0 > args.start_timeout:
             aborted = f"start timeout ({sum(c.ready for c in clients)}/16 joined)"
@@ -324,7 +331,7 @@ async def play_game(n, args, ctx, rnd):
                 a[1] += h
     r.update(score=16 - r["place"] if r.get("place") else None, kill_times=st["kills"],
              activations={str(i): (clients[i].tier, t) for i, t in sorted(st["active"].items())},
-             loadouts=[c.loadout for c in clients[1:]], hunter_deaths=deaths, other_deaths=len(other),
+             loadouts=[c.loadout for c in clients[1:]], damage_taken=st["dmg"], hunter_deaths=deaths, other_deaths=len(other),
              hits={f"{k[0]}/{k[1]}/{k[2]}": v for k, v in sorted(hits.items())})
     return r
 
@@ -379,7 +386,7 @@ async def main():
         try:
             r = await play_game(n, args, ctx, rnd)
         except Exception as e:
-            print(f"game {n}: failed {repr(e)[:160]}", flush=True)
+            print(f"{time.strftime('%H:%M:%S')} game {n}: failed {repr(e)[:160]}", flush=True)
             fails += 1
             n += 1
             await asyncio.sleep(10)
@@ -388,7 +395,7 @@ async def main():
         if r and r.get("place"):
             rows.append(r)
             act = " ".join(f"{t:.0f}" for _, t in r["activations"].values())
-            print(f"game {n - 1}: place {r['place']} score {r['score']} kills {r['kills']} at {r['kill_times']} "
+            print(f"{time.strftime('%H:%M:%S')} game {n - 1}: place {r['place']} score {r['score']} kills {r['kills']} at {r['kill_times']} "
                   f"died {r['t']:.0f}s  other-deaths {r['other_deaths']}  activations [{act}]", flush=True)
             with open(os.path.join(args.out, "results.jsonl"), "a") as f:
                 f.write(json.dumps(r) + "\n")
