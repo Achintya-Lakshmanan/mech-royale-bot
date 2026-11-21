@@ -48,7 +48,8 @@ const norm2 = (x: number, y: number): [number, number] => {
 /** experiment switches: regen = disengage to cover and heal; grow = farm drones/crates/cubes more widely */
 const V = { regen: true, grow: false }
 
-const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.6, mortar: 1.4, gun: 0 }
+// lasers deal the most damage to us (38% in our final 10 s) and have the best burst: take one first
+const WEAPON_RANK: Record<string, number> = { laser: 3, lightning: 2.8, mortar: 1.0, gun: 0 }
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
   "plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_damage", "gun_rate", "laser_charge",
@@ -103,6 +104,9 @@ class Brain {
   droneAttackers = new Map<number, number>()
   /** mechs that damaged us: id -> time */
   mechAttackers = new Map<number, number>()
+  /** a laser hit us from range and we cannot answer it: get out of its sight until this time */
+  losBreakUntil = -99
+  losBreakFrom = -1
   /** weapon pickups we have seen (the observation lists them only while visible) */
   knownPickups = new Map<number, { id: number; kind: string; pos: number[] }>()
   coverGoal: number[] | null = null
@@ -368,6 +372,10 @@ class Brain {
       if (ev.type === "damaged") {
         if (ev.by != null && ev.by >= 100) this.droneAttackers.set(ev.by, t)
         if (ev.by != null && ev.by < 16) this.mechAttackers.set(ev.by, t)
+        if (ev.weapon === "laser" && ev.by != null && ev.by < 16 && !obs.self.weapons.some((w) => w && w.kind === "laser")) {
+          const src = this.lastSeen.get(ev.by)
+          if (!src || hyp2(obs.self.pos, src.m.pos) > 60) { this.losBreakUntil = t + 3; this.losBreakFrom = ev.by }
+        }
         if (ev.weapon !== "zone") this.lastDamageT = t
         if (ev.bearing != null && ev.weapon !== "zone") {
           this.threatBearing = ev.bearing
@@ -620,6 +628,12 @@ class Brain {
         }
       }
       if (outgunned && !retreating && tDist > 45 && me.energy > 30) boost = true
+      // a laser is picking us off from range and we have no laser: break its line of sight (next shot is ~2.4 s away)
+      if (!retreating && t < this.losBreakUntil) {
+        const th = enemies.find((e) => e.id === this.losBreakFrom) ?? target
+        const c = this.coverPoint(obs, pos, th, 30)
+        if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
+      }
       // dodge: an enemy is charging a laser at us; step behind cover a few metres away
       if (!retreating) {
         for (const e of enemies) {
