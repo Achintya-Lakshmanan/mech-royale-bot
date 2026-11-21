@@ -562,7 +562,7 @@ class Brain {
       const los = shootAt === target ? tLos : true
       const size = shootAt.kind === "mech" ? 2.2 * (1 + 0.05 * (shootAt.cubes ?? 0)) : 1.6
       // gun
-      if (gunIdx >= 0 && los && a.dist < (gs?.range ?? 230) * 0.95) {
+      if (gunIdx >= 0 && los && a.dist < Math.min(120, (gs?.range ?? 230) * 0.95)) { // no long-range gunfire: it misses and gives us away
         const w = slots[gunIdx]!
         if ((w.reload ?? 0) <= 0 && (w.ammo ?? 1) > 0 && aimErrOk(a.yaw, a.pitch, a.dist, size)) fire[gunIdx] = true
       }
