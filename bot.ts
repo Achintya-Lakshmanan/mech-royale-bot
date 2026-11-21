@@ -683,6 +683,15 @@ class Brain {
       if (!tLos && !retreating && tDist > 20) {
         mv = this.navTo(obs, pos, target.pos, 4)
       }
+      // target out of sight: grab a nearby cube first (+4% HP and damage each)
+      if (!tLos && !retreating && t - this.lastDamageT > 1.5) {
+        let bc: number[] | null = null, bd = 35
+        for (const c of obs.cubes) {
+          const dc = hyp2(pos, c.pos)
+          if (dc < bd && c.pos[2] - this.map.ground(c.pos[0], c.pos[1]) <= 3 && this.zoneSafe(obs, c.pos, 5)) { bd = dc; bc = c.pos }
+        }
+        if (bc) { mv = this.navTo(obs, pos, bc, 1); this.mode = "fight+cube" }
+      }
       const cover = retreating && V.regen ? this.coverPoint(obs, pos, target) : null
       if (cover) {
         mv = this.navTo(obs, pos, cover, 1.5)
