@@ -100,6 +100,8 @@ class Brain {
   retreatMode = false
   /** NPC drones that shot us recently: id -> time */
   droneAttackers = new Map<number, number>()
+  /** mechs that damaged us: id -> time */
+  mechAttackers = new Map<number, number>()
   /** weapon pickups we have seen (the observation lists them only while visible) */
   knownPickups = new Map<number, { id: number; kind: string; pos: number[] }>()
   coverGoal: number[] | null = null
@@ -364,6 +366,7 @@ class Brain {
     for (const ev of obs.events) {
       if (ev.type === "damaged") {
         if (ev.by != null && ev.by >= 100) this.droneAttackers.set(ev.by, t)
+        if (ev.by != null && ev.by < 16) this.mechAttackers.set(ev.by, t)
         if (ev.weapon !== "zone") this.lastDamageT = t
         if (ev.bearing != null && ev.weapon !== "zone") {
           this.threatBearing = ev.bearing
@@ -412,6 +415,14 @@ class Brain {
     let bestScore = Infinity
     for (const e of enemies) {
       const d = hyp2(pos, e.pos)
+      // ghost: leave far mechs alone unless they are fighting us, about to laser us, or nearly dead
+      // (a mech within 60 m multiplies our death rate ~6x in recorded matches; picking fights does not pay)
+      {
+        const attacking = t - (this.mechAttackers.get(e.id) ?? -99) < 4
+        const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
+        const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
+        if (!(attacking || d < 60 || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
+      }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.04 - (visible ? 40 : 0)
       if (e.id === this.targetId) s -= 25
