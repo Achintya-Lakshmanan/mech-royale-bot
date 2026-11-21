@@ -350,6 +350,47 @@ class Brain {
     return mv
   }
 
+  fsSign = 1
+  fsUntil = 0
+  /** squad fight step: score 16 short steps (and standing) by range to the target, keeping it in sight,
+   *  staying out of sight of the other hunters, zone safety, open ground and a randomised strafe */
+  fightStep(obs: Observation, pos: V, tg: ActorObs, enemies: ActorObs[], want: number): [number, number] {
+    const t = obs.t
+    if (t >= this.fsUntil) {
+      if (this.rand() < 0.6) this.fsSign = -this.fsSign
+      this.fsUntil = t + 0.3 + this.rand() * 0.7
+    }
+    const [ux, uy] = norm2(tg.pos[0] - pos[0], tg.pos[1] - pos[1])
+    const sx = -uy * this.fsSign, sy = ux * this.fsSign
+    const tc = [tg.pos[0], tg.pos[1], tg.pos[2] + 4.5]
+    const mh = obs.self.stats.muzzle_height ?? 7
+    let best = -Infinity, bm: [number, number] = [0, 0], blockedSide = false
+    for (let k = -1; k < 16; k++) {
+      let cx = pos[0], cy = pos[1], dx = 0, dy = 0, r = 0
+      if (k >= 0) {
+        const a = (k * Math.PI) / 8
+        r = 6; dx = Math.cos(a); dy = Math.sin(a); cx += dx * r; cy += dy * r
+        if (!this.map.walkLine(pos[0], pos[1], cx, cy)) { if (dx * sx + dy * sy > 0.9) blockedSide = true; continue }
+      }
+      const cz = this.map.ground(cx, cy)
+      const d = Math.hypot(tg.pos[0] - cx, tg.pos[1] - cy)
+      let sc = -1.1 * Math.abs(d - want) - r * 0.4
+      if (this.map.los([cx, cy, cz + mh], tc)) sc += 45
+      for (const e of enemies) {
+        if (e.id === tg.id || Math.hypot(e.pos[0] - cx, e.pos[1] - cy) > 170) continue
+        if (this.map.los([e.pos[0], e.pos[1], e.pos[2] + 8], [cx, cy, cz + 5.4])) sc -= 30
+      }
+      if (!this.zoneSafe(obs, [cx, cy, cz], 5)) sc -= 60
+      const cl = this.map.clearAt(cx, cy)
+      if (cl < 4) sc -= (4 - cl) * 2.5
+      sc += 9 * (dx * sx + dy * sy)
+      if (k < 0) sc -= 8
+      if (sc > best) { best = sc; bm = [dx, dy] }
+    }
+    if (blockedSide) { this.fsSign = -this.fsSign; this.fsUntil = t + 0.5 }
+    return bm
+  }
+
   // ---------- aiming ----------
   aimPoint(me: Observation["self"], tgt: ActorObs, speed: number): { yaw: number; pitch: number; dist: number; pt: V } {
     // an action takes effect about one tick later: shoot from where we will be, at where it will be
@@ -878,6 +919,7 @@ class Brain {
           break
         }
       }
+      if (hunt && !retreating && tLos && t >= this.losBreakUntil) { mv = this.fightStep(obs, pos, target, enemies, want); this.mode += ":step" }
       if (hunt && !retreating) {
         let r = hpFrac <= 0.5 ? 40 : 70, bc: number[] | null = null
         for (const c of obs.cubes) {
