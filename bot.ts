@@ -467,8 +467,53 @@ class Brain {
     for (const e of enemies) this.lastSeen.set(e.id, { t, m: e })
     const eye: V = [pos[0], pos[1], pos[2] + (me.stats.eye_height ?? 8)]
     const muzzle: V = [pos[0], pos[1], pos[2] + (me.stats.muzzle_height ?? 7)]
-    const losTo = (m: ActorObs) => this.map.los(muzzle, [m.pos[0], m.pos[1], m.pos[2] + (m.kind === "mech" ? 4.5 : 1.75)]) ||
+    const losMemo = new Map<number, boolean>()
+    const losTo = (m: ActorObs) => {
+      let v = losMemo.get(m.id)
+      if (v === undefined) { v = losRaw(m); losMemo.set(m.id, v) }
+      return v
+    }
+    const losRaw = (m: ActorObs) => this.map.los(muzzle, [m.pos[0], m.pos[1], m.pos[2] + (m.kind === "mech" ? 4.5 : 1.75)]) ||
       this.map.los(muzzle, [m.pos[0], m.pos[1], m.pos[2] + (m.kind === "mech" ? 8 : 3)])
+
+    // ---- fight model: who wins this fight? ----
+    // Expected damage per second from a mech's weapons at distance d. Hit rates are measured from recorded matches:
+    // ours for our bot, the house bots' (much worse with the laser and at range) for everyone else.
+    const hitTab = (tab: number[], d: number) => tab[Math.min(tab.length - 1, Math.max(0, Math.floor((d - 30) / 30)))]
+    const OUR_GUN = [0.86, 0.86, 0.69, 0.55, 0.47, 0.34, 0.24], THEIR_GUN = [0.83, 0.83, 0.62, 0.36, 0.24, 0.15, 0.12]
+    const OUR_LASER = [0.81, 0.81, 0.73, 0.70, 0.56, 0.45, 0.4], THEIR_LASER = [0.45, 0.45, 0.33, 0.24, 0.19, 0.15, 0.12]
+    const dps = (kinds: string[], d: number, ours: boolean): number => {
+      let v = 0
+      for (const k of kinds) {
+        if (k === "gun" && d < (ours ? 120 : 230)) v += 102 * hitTab(ours ? OUR_GUN : THEIR_GUN, d) // 12 x 45 per 5.3 s magazine cycle
+        else if (k === "laser" && d < 280) v += 131 * hitTab(ours ? OUR_LASER : THEIR_LASER, d) // 315 per 2.4 s
+        else if (k === "lightning" && d < 45) v += 140 // 60 per 0.25 s, energy-limited
+        else if (k === "mortar" && d > 28 && d < 220) v += 50
+      }
+      return v
+    }
+    const showsBack = (aimYaw: number, from: number[], to: number[]) =>
+      Math.abs(wrap(Math.atan2(to[1] - from[1], to[0] - from[0]) - aimYaw)) > Math.PI / 2 + 0.1
+    const myKinds = slots.filter((w) => w).map((w) => w!.kind as string)
+    const myScale = 1 + 0.04 * Math.min(me.cubes ?? 0, 10)
+    /** odds of winning a fight against e right now: time for us to kill it vs time for everyone hitting us to kill us */
+    const fightOdds = (e: ActorObs) => {
+      const d = hyp2(pos, e.pos)
+      let ours = dps(myKinds, d, true) * myScale
+      if (showsBack(e.aim[0], e.pos, pos)) ours *= 1.5
+      let theirs = 0
+      for (const o of enemies) {
+        const dO = hyp2(pos, o.pos)
+        if (o.id !== e.id && (dO > 230 || !losTo(o))) continue
+        let v = dps((o.weapons ?? ["gun"]) as string[], dO, false) * (1 + 0.04 * Math.min(o.cubes ?? 0, 10))
+        if (showsBack(me.aim[0], pos, o.pos)) v *= 1.5
+        theirs += v
+      }
+      const ourTTK = (e.hp ?? 1400) / Math.max(1, ours)
+      const theirTTK = me.hp / Math.max(1, theirs)
+      const p = 1 / (1 + Math.exp(-1.6 * Math.log(theirTTK / ourTTK)))
+      return { p, ourTTK, theirTTK }
+    }
 
     // ---- choose target mech ----
     // magazine-aware finishing: how much damage can we put out in the next couple of seconds?
@@ -502,7 +547,7 @@ class Brain {
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
         // ambush: let hunters come to us; engage only inside 70 m or when they open fire
-        if (false ? d > 240 : !(attacking || d < 70 || (e.charging && aimedAtMe && d < 120))) continue
+        if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120) || (hunt && d < 130 && losTo(e) && fightOdds(e).p > 0.7))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
@@ -526,7 +571,12 @@ class Brain {
         if (hyp2(pos, e.pos) < 230 && Math.abs(wrap(toMe - e.aim[0])) < 0.3 && losTo(e)) shooters++
       }
       const tFrac = target ? (target.hp ?? 1400) / (target.max_hp ?? 1400) : 1
-      if ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (shooters >= 2 && hpFrac < 0.55) || (shooters >= 3 && hpFrac < 0.8)) this.retreatMode = true
+      if (hunt && target) {
+        // practice: leave fights we are losing unless we can finish the target first; come back when the odds turn
+        const fo = fightOdds(target)
+        if (fo.p < 0.3 && fo.ourTTK > 1.2) this.retreatMode = true
+        if (fo.p > 0.6 && hpFrac > 0.5) this.retreatMode = false
+      } else if ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (shooters >= 2 && hpFrac < 0.55) || (shooters >= 3 && hpFrac < 0.8)) this.retreatMode = true
       if (hpFrac > 0.85 || (t - this.lastDamageT > 8 && hpFrac > 0.6)) this.retreatMode = false
     }
     const tDist = target ? hyp2(pos, target.pos) : Infinity
@@ -691,6 +741,10 @@ class Brain {
       if (tDist > want + 12) radial = 1
       else if (tDist < want - 12) radial = -1
       if (retreating) radial = -1
+      if (hunt && !retreating && tLos) {
+        const fo = fightOdds(target)
+        if (fo.p > 0.75 && fo.ourTTK < 2.5 && tDist > 25) { radial = 1; if (me.energy > 30) boost = true; this.mode = "fight+finish" }
+      }
       if (t > this.strafeUntil) {
         this.strafeSign = this.rand() < 0.5 ? -1 : 1
         this.strafeUntil = t + 0.3 + this.rand() * 0.5
