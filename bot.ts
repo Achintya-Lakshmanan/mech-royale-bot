@@ -502,7 +502,7 @@ class Brain {
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
         // ambush: let hunters come to us; engage only inside 70 m or when they open fire
-        if (hunt ? d > 240 : !(attacking || d < 70 || (e.charging && aimedAtMe && d < 120))) continue
+        if (false ? d > 240 : !(attacking || d < 70 || (e.charging && aimedAtMe && d < 120))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
@@ -730,7 +730,7 @@ class Brain {
         if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
       }
       // fight position: with more than one hostile around, fight from a spot only our target can see
-      if (!retreating && tLos && !hunt) {
+      if (!retreating && tLos) {
         const others = enemies.filter((e) => e.id !== target.id && hyp2(pos, e.pos) < 200)
         const spot = this.peekSpot(obs, pos, target, others)
         if (spot && hyp2(pos, spot) > 2) { mv = this.navTo(obs, pos, spot, 1.0); this.mode = "peek" }
@@ -837,7 +837,7 @@ class Brain {
           const d = hyp2(pos, m.pos)
           if (t - ts < 15 && d < bd && this.zoneSafe(obs, m.pos, 5)) { bd = d; best = m.pos }
         }
-        if (best && bd > 30) { goal = [best[0], best[1]]; this.mode = "hunt" }
+        if (false && best && bd > 30) { goal = [best[0], best[1]]; this.mode = "hunt" }
       }
       if (!goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
         const hg = this.homeGoal(obs, pos)
