@@ -807,6 +807,15 @@ class Brain {
         const spot = this.peekSpot(obs, pos, target, others)
         if (spot && hyp2(pos, spot) > 2) { mv = this.navTo(obs, pos, spot, 1.0); this.mode = "peek" }
       }
+      // practice: collect the cubes our kills drop (+4% max HP and damage each, upgrades at 1/3/6/10), still shooting
+      if (hunt && !retreating) {
+        let bc: number[] | null = null, bd = 100
+        for (const c of obs.cubes) {
+          const d = hyp2(pos, c.pos)
+          if (d < bd && c.pos[2] - this.map.ground(c.pos[0], c.pos[1]) < 3 && this.zoneSafe(obs, c.pos, 5)) { bd = d; bc = c.pos }
+        }
+        if (bc) { mv = this.navTo(obs, pos, bc, 0.5); this.mode = "fight+collect" }
+      }
       // dodge: an enemy is charging a laser at us; in free-for-all step behind cover a few metres away
       if (!retreating && this.ffa) {
         for (const e of enemies) {
