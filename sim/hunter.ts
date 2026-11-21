@@ -1,7 +1,15 @@
-/** Mech Royale bot: zone-aware navigation, looting, and a kiting gunfight with weapon-specific aiming. */
+/**
+ * Practice-squad hunter for sim/practice_sim.py, derived from our own bot but cut down to a house-bot-like hunter:
+ * no retreat/regen, no peeking, no line-of-sight breaking, no dodging, no farming, gun fire capped at HUNTER_GUN_MAX m,
+ * one assigned loot weapon (HUNTER_LOADOUT), and aim noise (HUNTER_SIGMA_DEG) held for 0.3-0.5 s and applied to
+ * every weapon, with fire gated on the noiseless aim. practice_sim.py passes `obs.intel` = { target, active, pos }:
+ * inactive hunters are passive (stay in the zone, pick up their weapon, shoot only drones that attack them) unless
+ * HUNTER_DEFEND_S > 0, in which case they fight back for that many seconds after the target damages them.
+ * Writes "HSTAT {json}" lines to stderr: shots and hits on the target by weapon and 30 m distance bin.
+ */
 import { type Action, type ActorObs, draw, type Hello, type Observation, run } from "../mechfight.ts"
 import { GameMap } from "../map.ts"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, writeSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -46,7 +54,26 @@ const norm2 = (x: number, y: number): [number, number] => {
 }
 
 /** experiment switches: regen = disengage to cover and heal; grow = farm drones/crates/cubes more widely */
-const V = { regen: true, grow: false }
+const V = { regen: false, grow: false }
+const ENV = process.env
+const H = {
+  sigma: (Number(ENV.HUNTER_SIGMA_DEG ?? 0) * Math.PI) / 180,
+  loadout: ENV.HUNTER_LOADOUT ?? "laser", // laser | lightning | mortar | none
+  defendS: Number(ENV.HUNTER_DEFEND_S ?? 0),
+  gunMax: Number(ENV.HUNTER_GUN_MAX ?? 150),
+  holdMin: 0.3, holdMax: 0.5,
+}
+/** shots/hits on the target: weapon -> distance bin (30 m) -> [shots, hits] */
+const STATS: Record<string, Record<number, number[]>> = {}
+const stat = (w: string, d: number, k: 0 | 1, n = 1) => {
+  const b = Math.floor(d / 30) * 30
+  const r = (STATS[w] ??= {})
+  ;(r[b] ??= [0, 0])[k] += n
+}
+const dumpStats = () => { try { writeSync(2, `HSTAT ${JSON.stringify(STATS)}\n`) } catch {} }
+process.on("exit", dumpStats)
+process.on("SIGTERM", () => process.exit(0))
+setInterval(dumpStats, 3000).unref()
 
 // lasers deal the most damage to us (38% in our final 10 s) and have the best burst: take one first
 // room games: laser games won (1st, 1st, 7th), lightning games lost (9th-14th): the laser is the weapon to have
@@ -117,6 +144,14 @@ class Brain {
   knownPickups = new Map<number, { id: number; kind: string; pos: number[] }>()
   coverGoal: number[] | null = null
   coverT = -99
+  // held aim noise
+  noiseY = 0
+  noiseP = 0
+  noiseUntil = -99
+  // shot accounting (target only)
+  prevAmmo = -1
+  prevLaserCharge = 0
+  prevShootDist: number | null = null
 
   constructor(hello: Hello) {
     this.cfg = hello.config
@@ -202,8 +237,9 @@ class Brain {
     const has = (k: string) => slots.some((w) => w && w.kind === k)
     const myWorst = slots[1] ? WEAPON_RANK[slots[1].kind] ?? 0 : -1
     let bp: { id: number; kind: string; pos: number[] } | null = null, bs = -Infinity
+    if (H.loadout === "none" || slots[1]) return null
     for (const p of this.knownPickups.values()) {
-      if (has(p.kind)) continue
+      if (has(p.kind) || p.kind !== H.loadout) continue
       const r = WEAPON_RANK[p.kind] ?? 0
       if (r <= myWorst + 0.3) continue
       const d = hyp2(pos, p.pos)
@@ -431,6 +467,31 @@ class Brain {
       // a remembered pickup close by that we no longer see has been taken
       for (const [id, p] of this.knownPickups) if (!vis.has(id) && hyp2(pos, p.pos) < 25) this.knownPickups.delete(id)
     }
+    // ---- held aim noise; `me.aim` minus the offset we applied last decision is our noiseless aim ----
+    const appliedY = this.noiseY, appliedP = this.noiseP
+    if (t >= this.noiseUntil) {
+      const g = () => Math.sqrt(-2 * Math.log(Math.max(1e-9, this.rand()))) * Math.cos(2 * Math.PI * this.rand())
+      this.noiseY = H.sigma > 0 ? g() * H.sigma : 0
+      this.noiseP = H.sigma > 0 ? g() * H.sigma : 0
+      this.noiseUntil = t + H.holdMin + this.rand() * (H.holdMax - H.holdMin)
+    }
+    const trueYaw = me.aim[0] - appliedY, truePitch = me.aim[1] - appliedP
+    // ---- shot accounting on the target ----
+    {
+      const gw = slots.find((w) => w && w.kind === "gun")
+      const ammo = gw ? (gw.ammo ?? 0) : -1
+      if (this.prevAmmo >= 0 && ammo >= 0 && ammo < this.prevAmmo && this.prevShootDist != null) stat("gun", this.prevShootDist, 0, this.prevAmmo - ammo)
+      this.prevAmmo = ammo
+      const lw = slots.find((w) => w && w.kind === "laser")
+      const ch = lw ? (lw.charge ?? 0) : 0
+      if (this.prevLaserCharge > 0 && ch === 0 && lw && (lw.cooldown ?? 0) > 0.5 && this.prevShootDist != null) stat("laser", this.prevShootDist, 0)
+      this.prevLaserCharge = ch
+      if (intel) {
+        const ls = this.lastSeen.get(intel.target)
+        const d = ls && t - ls.t < 1 ? hyp2(pos, ls.m.pos) : this.prevShootDist
+        for (const ev of obs.events) if (ev.type === "hit" && ev.target === intel.target && d != null && ev.weapon !== "lightning") stat(ev.weapon, d, 1)
+      }
+    }
     // more mechs died than we killed (plus one for zone or drone deaths): the others are fighting each other
     this.ffa = false
     this.posHist.push({ t, p: pos.slice() })
@@ -448,7 +509,7 @@ class Brain {
     }
 
     const enemies = obs.mechs.filter((m) => m.kind === "mech" && (!intel || (m.id === intel.target &&
-      (intel.active || obs.t - (this.mechAttackers.get(m.id) ?? -99) < 6))))
+      (intel.active || (H.defendS > 0 && obs.t - (this.mechAttackers.get(m.id) ?? -99) < H.defendS)))))
     const npcs = obs.mechs.filter((m) => m.kind === "npc")
     for (const e of enemies) this.lastSeen.set(e.id, { t, m: e })
     const eye: V = [pos[0], pos[1], pos[2] + (me.stats.eye_height ?? 8)]
@@ -526,7 +587,7 @@ class Brain {
 
     const aimErrOk = (yaw: number, pitch: number, dist: number, tolMeters: number) => {
       const tol = Math.max(0.012, Math.atan2(tolMeters, Math.max(1, dist)))
-      return Math.abs(wrap(me.aim[0] - yaw)) < tol && Math.abs(me.aim[1] - pitch) < tol * 1.3
+      return Math.abs(wrap(trueYaw - yaw)) < tol && Math.abs(truePitch - pitch) < tol * 1.3
     }
 
     // target to shoot: mech first, else npc/crate when farming
@@ -539,7 +600,7 @@ class Brain {
         const d = hyp2(pos, n.pos)
         const hittingUs = t - (this.droneAttackers.get(n.id) ?? -99) < 4
         const dd = hittingUs ? d - 60 : d // prefer the drone that is shooting us
-        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && !healing && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
+        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && hittingUs /* hunters: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -562,7 +623,7 @@ class Brain {
       const los = shootAt === target ? tLos : true
       const size = shootAt.kind === "mech" ? 2.2 * (1 + 0.05 * (shootAt.cubes ?? 0)) : 1.6
       // gun
-      if (gunIdx >= 0 && los && a.dist < (gs?.range ?? 230) * 0.95) {
+      if (gunIdx >= 0 && los && a.dist < Math.min((gs?.range ?? 230) * 0.95, H.gunMax)) {
         const w = slots[gunIdx]!
         if ((w.reload ?? 0) <= 0 && (w.ammo ?? 1) > 0 && aimErrOk(a.yaw, a.pitch, a.dist, size)) fire[gunIdx] = true
       }
@@ -570,7 +631,7 @@ class Brain {
       if (lightIdx >= 0) {
         const ls = slots[lightIdx]!.stats as Record<string, number>
         const cone = ((ls.cone_deg ?? 30) * Math.PI) / 180
-        const inCone = Math.abs(wrap(me.aim[0] - Math.atan2(shootAt.pos[1] - pos[1], shootAt.pos[0] - pos[0]))) < cone * 0.8
+        const inCone = Math.abs(wrap(trueYaw - Math.atan2(shootAt.pos[1] - pos[1], shootAt.pos[0] - pos[0]))) < cone * 0.8
         if (los && a.dist < (ls.range ?? 45) * 0.97 && inCone && me.energy > (ls.energy ?? 3) + (farming ? 30 : 6)) fire[lightIdx] = true
       }
       // laser: hold to charge, release when full and aligned
@@ -602,7 +663,7 @@ class Brain {
             if (!(laserIdx >= 0 && (slots[laserIdx]!.charge ?? 0) > 0)) {
               aimYaw = sol.yaw
               aimPitch = sol.pitch
-              fire[mortarIdx] = Math.abs(wrap(me.aim[0] - sol.yaw)) < 0.025 && Math.abs(me.aim[1] - sol.pitch) < 0.025
+              fire[mortarIdx] = Math.abs(wrap(trueYaw - sol.yaw)) < 0.025 && Math.abs(truePitch - sol.pitch) < 0.025
               if (gunIdx >= 0 && fire[gunIdx] && !fire[mortarIdx]) fire[gunIdx] = false
             }
           }
@@ -611,8 +672,8 @@ class Brain {
       draw.line(muzzle, a.pt, shootAt.kind === "mech" ? "#ff5040" : "#ffa040")
     }
 
-    // crates when idle
-    if (!shootAt && !this.retreatMode && !healing) {
+    // crates when idle (hunters: never)
+    if (false && !shootAt && !this.retreatMode && !healing) {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
       for (const c of obs.crates) {
         const d = hyp2(pos, c.pos)
@@ -647,7 +708,7 @@ class Brain {
     const inZoneNow = me.in_zone
     const recentlyHit = t - this.lastDamageT < 3
 
-    let retreating = target != null && (hpFrac < 0.3 || (hpFrac < 0.45 && (target.hp ?? 0) > me.hp * 1.3))
+    let retreating = false // hunters never retreat
     if (V.regen && target) {
       // heal behind cover, unless the enemy is nearly dead and in our sights
       retreating = this.retreatMode && !(tLos && ((target.hp ?? 1400) < me.hp * 0.5 || killable(target)))
@@ -705,13 +766,13 @@ class Brain {
       }
       if (outgunned && !retreating && tDist > 45 && me.energy > 30) boost = true
       // a laser is picking us off from range and we have no laser: break its line of sight (next shot is ~2.4 s away)
-      if (!retreating && t < this.losBreakUntil) {
+      if (false && !retreating && t < this.losBreakUntil) {
         const th = enemies.find((e) => e.id === this.losBreakFrom) ?? target
         const c = this.coverPoint(obs, pos, th, 30)
         if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
       }
       // fight position: with more than one hostile around, fight from a spot only our target can see
-      if (!retreating && tLos) {
+      if (false && !retreating && tLos) {
         const others = enemies.filter((e) => e.id !== target.id && hyp2(pos, e.pos) < 200)
         const spot = this.peekSpot(obs, pos, target, others)
         if (spot && hyp2(pos, spot) > 2) { mv = this.navTo(obs, pos, spot, 1.0); this.mode = "peek" }
@@ -752,8 +813,8 @@ class Brain {
         this.mode = "hunt"
         if (hyp2(pos, goal) > 40 && me.energy > 40) boost = true
       }
-      // supply drop
-      if (!goal && obs.drops) {
+      // supply drop (hunters: never)
+      if (false && !goal && obs.drops) {
         for (const d of obs.drops) {
           const dd = hyp2(pos, d.pos)
           if (dd < 220 && d.lands_in < dd / 11 + 5 && this.zoneSafe(obs, d.pos, 5) && (d.holder == null || d.holder === me.id)) {
@@ -767,7 +828,7 @@ class Brain {
         }
       }
       // nearby cubes first: a kill drops all the victim's cubes plus two (+4% HP and damage each)
-      if (!goal && this.mode !== "capture") {
+      if (false && !goal && this.mode !== "capture") {
         let bc: number[] | null = null, bd = Infinity
         for (const c of obs.cubes) {
           const d = hyp2(pos, c.pos)
@@ -790,8 +851,8 @@ class Brain {
           if (!slots[1] && d > 30 && me.energy > 40) boost = true
         }
       }
-      // cubes
-      if (!goal && this.mode !== "capture") {
+      // cubes (hunters: never)
+      if (false && !goal && this.mode !== "capture") {
         let bc: (typeof obs.cubes)[number] | null = null, bd = Infinity
         for (const c of obs.cubes) {
           const d = hyp2(pos, c.pos)
@@ -817,7 +878,8 @@ class Brain {
         if (d > want) goal = [shootAt.pos[0], shootAt.pos[1]]
         this.mode = "farm"
       }
-      if (!goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
+      // hunters without a goal hold their position (no gathering on the zone)
+      if (false && !goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
         const hg = this.ffa ? this.homeGoal(obs, pos) : null
         goal = hg ?? this.zoneGoal(obs, pos)
         if (hyp2(pos, goal) < (hg ? 2.5 : 25)) goal = null
@@ -845,8 +907,8 @@ class Brain {
         if (l > quiet) mv = [(mv[0] / l) * quiet, (mv[1] / l) * quiet]
       }
     }
-    // dodge: sidestep bullets about to hit, leave mortar landing spots, step off a charging laser's line
-    {
+    // dodge: sidestep bullets about to hit, leave mortar landing spots, step off a charging laser's line (hunters: off)
+    if (false) {
       let dx = 0, dy = 0, urgent = false
       const sc = 1 + 0.05 * (me.cubes ?? 0)
       const cz = pos[2] + 4.5 * sc
@@ -941,16 +1003,11 @@ class Brain {
     act.move = [mv[0], mv[1]]
     act.boost = boost
     act.jump = jump
-    {
-      const sg = (Number(process.env.HUNTER_SIGMA_DEG ?? 0) * Math.PI) / 180
-      if (sg > 0) {
-        const g = () => Math.sqrt(-2 * Math.log(Math.max(1e-9, this.rand()))) * Math.cos(2 * Math.PI * this.rand())
-        aimYaw += g() * sg
-        aimPitch += g() * sg
-      }
-    }
+    aimYaw += this.noiseY
+    aimPitch += this.noiseP
     act.aim = [wrap(aimYaw), clamp(aimPitch, this.cfg.mech.min_pitch ?? -0.7, this.cfg.mech.max_pitch ?? 1.3)]
     act.fire = fire
+    this.prevShootDist = shootAt && target && shootAt === target ? hyp2(pos, target.pos) : null
 
     draw.label(`${this.ffa ? "ffa " : ""}${this.mode} hp${Math.round(me.hp)} e${Math.round(me.energy)} ${target ? "T" + target.id : ""}`)
     return act
