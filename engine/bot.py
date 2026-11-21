@@ -997,7 +997,7 @@ class Bot:
             ang = math.atan2(mp[1] - y, mp[0] - x)
             if t > self.strafe_until:
                 self.strafe_sign = -self.strafe_sign if self.rng.random() < (1.0 if "jink" in self.flags else 0.7) else self.strafe_sign
-                self.strafe_until = t + ((0.35 + self.rng.random() * 0.55) if "jink" in self.flags else (1.0 + self.rng.random() * 1.6))
+                self.strafe_until = t + ((0.25 + self.rng.random() * 0.45) if "jink" in self.flags else (1.0 + self.rng.random() * 1.6))
             radial = max(-1.0, min(1.0, (d - pref) / 30.0))
             side = 0.85 * self.strafe_sign
             mvx = math.cos(ang) * radial + math.cos(ang + math.pi / 2) * side
