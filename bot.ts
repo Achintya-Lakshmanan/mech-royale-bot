@@ -51,7 +51,7 @@ const V = { regen: true, grow: false }
 // lasers deal the most damage to us (38% in our final 10 s) and have the best burst: take one first
 // room games: laser games won (1st, 1st, 7th), lightning games lost (9th-14th): the laser is the weapon to have
 // ambush: lightning (auto-aim, 240 dps inside 45 m) is the close-range burst weapon
-const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.8, mortar: 1.0, gun: 0 }
+const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.8, mortar: -1, gun: 0 }
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
   "plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_damage", "gun_rate", "laser_charge",
@@ -584,11 +584,11 @@ class Brain {
           if (charge > 0) {
             // keep holding until full and aligned and visible
             fire[laserIdx] = !(charge >= full && aligned && los)
-            if (charge > full + (ls.hold_s ?? 2) - 0.25) fire[laserIdx] = false
+            if (!los && charge >= full + 0.3) fire[laserIdx] = false // target hid: don't crawl at half speed until it times out
           } else if ((w.cooldown ?? 0) <= 0.1 && los && !farming) {
             fire[laserIdx] = true
           } else if (farming && (w.cooldown ?? 0) <= 0.1 && los) fire[laserIdx] = true
-        } else if (charge > 0) fire[laserIdx] = true // keep holding while target out of view
+        } else if (charge > 0) fire[laserIdx] = charge < full // out of view: finish charging, then let it go
       }
       // mortar
       if (mortarIdx >= 0 && a.dist > 28 && a.dist < 220 && shootAt.kind === "mech") {
@@ -878,7 +878,8 @@ class Brain {
           if (!e.charging) continue
           const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
           if (Math.abs(wrap(e.aim[0] - toMe)) > Math.max(0.06, Math.atan2(6, hyp2(pos, e.pos))) || !losTo(e)) continue
-          dx += -Math.sin(toMe) * this.strafeSign * 1.5; dy += Math.cos(toMe) * this.strafeSign * 1.5; urgent = true
+          const side = -(Math.sign(wrap(e.aim[0] - toMe)) || 1)
+          dx += -Math.sin(toMe) * side * 1.5; dy += Math.cos(toMe) * side * 1.5; urgent = true
         }
       }
       if (urgent && this.mode !== "capture") {
@@ -896,7 +897,8 @@ class Brain {
 
     // ---- stuck handling ----
     const moving = Math.hypot(mv[0], mv[1]) > 0.3
-    if (moving && this.posHist.length > 8 && t > this.stuckUntil) {
+    const fighting = /^(fight|peek|retreat|dodge|break-los)/.test(this.mode) || this.mode.includes("+dodge")
+    if (moving && !fighting && this.posHist.length > 8 && t > this.stuckUntil) {
       const old = this.posHist[0]
       if (t - old.t > 0.9 && hyp2(old.p, pos) < 1.2) {
         this.stuckUntil = t + 1.2
