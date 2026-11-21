@@ -352,19 +352,22 @@ class Brain {
 
   // ---------- aiming ----------
   aimPoint(me: Observation["self"], tgt: ActorObs, speed: number): { yaw: number; pitch: number; dist: number; pt: V } {
+    // an action takes effect about one tick later: shoot from where we will be, at where it will be
+    const LAT = 0.075
+    const ox = me.pos[0] + me.vel[0] * LAT, oy = me.pos[1] + me.vel[1] * LAT
     const mz = me.pos[2] + (me.stats.muzzle_height ?? 7)
     const scale = tgt.kind === "mech" ? 1 + 0.05 * (tgt.cubes ?? 0) : 1
     const hz = tgt.kind === "mech" ? 4.5 * scale : 1.75
     let px = tgt.pos[0], py = tgt.pos[1], pz = tgt.pos[2] + hz
     let tt = 0
     for (let i = 0; i < 3; i++) {
-      const d = Math.hypot(px - me.pos[0], py - me.pos[1], pz - mz)
-      tt = d / speed
+      const d = Math.hypot(px - ox, py - oy, pz - mz)
+      tt = Math.max(0, d - 3) / speed + LAT
       px = tgt.pos[0] + tgt.vel[0] * tt
       py = tgt.pos[1] + tgt.vel[1] * tt
       pz = tgt.pos[2] + hz + (tgt.vel[2] ?? 0) * tt * 0.5
     }
-    const dx = px - me.pos[0], dy = py - me.pos[1]
+    const dx = px - ox, dy = py - oy
     const dist = Math.hypot(dx, dy)
     return { yaw: Math.atan2(dy, dx), pitch: Math.atan2(pz - mz, dist), dist, pt: [px, py, pz] }
   }
@@ -670,7 +673,7 @@ class Brain {
       aimPitch = a.pitch
       // hitscan aim for the laser: current position plus ~0.1 s of motion
       const hit = (() => {
-        const lead = { ...shootAt, pos: [shootAt.pos[0] + shootAt.vel[0] * 0.1, shootAt.pos[1] + shootAt.vel[1] * 0.1, shootAt.pos[2]] } as ActorObs
+        const lead = { ...shootAt, pos: [shootAt.pos[0] + shootAt.vel[0] * 0.05, shootAt.pos[1] + shootAt.vel[1] * 0.05, shootAt.pos[2]] } as ActorObs
         return this.aimPoint(me, lead, 1e9)
       })()
       const lw = laserIdx >= 0 ? slots[laserIdx]! : null
