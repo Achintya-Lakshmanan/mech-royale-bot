@@ -65,8 +65,13 @@ def main():
     ap.add_argument("--parallel", type=int, default=1)
     ap.add_argument("--kit", default="", help="kit folder (holds ts/example.ts); default: parent of --arena")
     ap.add_argument("--only", default="", help="comma-separated commits to run (default: all)")
+    ap.add_argument("--pool", default="", help="no games: pool every <work>/run-*-<TAG> directory with this exact settings tag and print the table")
     ap.add_argument("simargs", nargs=argparse.REMAINDER, help="extra args for practice_sim.py, after --")
     a = ap.parse_args()
+    if a.pool:
+        dirs = [os.path.join(a.work, d) for d in sorted(os.listdir(a.work)) if re.fullmatch(r"run-\d{4}-\d{6}-" + re.escape(a.pool), d)]
+        report(a.pool, dirs, [c for c in REAL if any(os.path.exists(os.path.join(d, c, "results.jsonl")) for d in dirs)])
+        return
     extra = [x for x in a.simargs if x != "--"]
     commits = [c for c in REAL if not a.only or c in a.only.split(",")]
     if a.only:
@@ -93,17 +98,25 @@ def main():
             if item[1].poll() is not None:
                 running.remove(item)
         time.sleep(5)
+    report(tag, [run_dir], commits)
+
+
+def report(tag, dirs, commits):
     rows = []
     for c in commits:
-        f = os.path.join(run_dir, c, "results.jsonl")
-        pl = [json.loads(l)["place"] for l in open(f)] if os.path.exists(f) else []
-        if pl:
-            rows.append((c, REAL[c], st.mean(16 - p for p in pl), len(pl)))
+        sc = []
+        for d in dirs:
+            f = os.path.join(d, c, "results.jsonl")
+            if os.path.exists(f):
+                sc += [16 - json.loads(l)["place"] for l in open(f)]
+        if sc:
+            se = (st.stdev(sc) / len(sc) ** 0.5) if len(sc) > 1 else 0
+            rows.append((c, REAL[c], st.mean(sc), len(sc), se, st.median(sc)))
     rows.sort(key=lambda r: -r[1])
-    print(f"settings: {tag}  ({run_dir})")
-    print(f"{'commit':9}{'real':>6}{'sim':>7}{'games':>6}")
-    for c, r, s, n in rows:
-        print(f"{c:9}{r:6.2f}{s:7.2f}{n:6}")
+    print(f"settings: {tag}  ({', '.join(dirs)})")
+    print(f"{'commit':9}{'real':>6}{'sim':>7}{'+-se':>6}{'median':>7}{'games':>6}")
+    for c, r, s, n, se, md in rows:
+        print(f"{c:9}{r:6.2f}{s:7.2f}{se:6.2f}{md:7.1f}{n:6}")
     if len(rows) >= 3:
         real = [r[1] for r in rows]; sim = [r[2] for r in rows]
         print(f"rank correlation {spearman(real, sim):.2f}  mean abs error {st.mean(abs(x - y) for x, y in zip(real, sim)):.2f}"
