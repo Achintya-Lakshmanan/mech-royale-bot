@@ -571,7 +571,7 @@ class Brain {
         if (hyp2(pos, e.pos) < 230 && Math.abs(wrap(toMe - e.aim[0])) < 0.3 && losTo(e)) shooters++
       }
       const tFrac = target ? (target.hp ?? 1400) / (target.max_hp ?? 1400) : 1
-      if (hunt && target) {
+      if (false && hunt && target) {
         // practice: leave fights we are losing unless we can finish the target first; come back when the odds turn
         const fo = fightOdds(target)
         if (fo.p < 0.3 && fo.ourTTK > 1.2) this.retreatMode = true
