@@ -505,6 +505,12 @@ class Brain {
       for (const o of enemies) {
         const dO = hyp2(pos, o.pos)
         if (o.id !== e.id && (dO > 230 || !losTo(o))) continue
+        if (o.id !== e.id) {
+          // only count mechs engaged with us: hit us in the last 4 s, or aiming at us
+          const hitUs = t - (this.mechAttackers.get(o.id) ?? -99) < 4
+          const aimsAtUs = Math.abs(wrap(Math.atan2(pos[1] - o.pos[1], pos[0] - o.pos[0]) - o.aim[0])) < 0.3
+          if (!hitUs && !aimsAtUs) continue
+        }
         let v = dps((o.weapons ?? ["gun"]) as string[], dO, false) * (1 + 0.04 * Math.min(o.cubes ?? 0, 10))
         if (showsBack(me.aim[0], pos, o.pos)) v *= 1.5
         theirs += v
