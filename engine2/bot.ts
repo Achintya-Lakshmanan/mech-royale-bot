@@ -41,9 +41,6 @@ class Brain {
   targetId = -1
   targetT = -99
   mechHitBearing = 0
-  ffa = false
-  myKills = 0
-  beamClues = 0
   npcMem = new Map<number, { pos: number[]; vel: number[]; t: number; hp: number }>()
 
   constructor(hello: Hello) {
@@ -105,29 +102,7 @@ class Brain {
         this.threatBearing = e.bearing
         this.threatT = t
       }
-      if (e.type === "kill") {
-        this.tracks.delete(e.target)
-        this.myKills++
-      }
-    }
-    // free-for-all detection: practice house bots never fight each other
-    if (!this.ffa) {
-      if (16 - o.alive - this.myKills >= 3) {
-        this.ffa = true
-        log(`ffa by alive t=${t} alive=${o.alive} kills=${this.myKills}`)
-      }
-      for (const b of o.beams ?? []) {
-        if (b.by == null || b.by >= 16 || !b.path?.length) continue
-        const end = b.path[b.path.length - 1]
-        if (b.path.some((p: number[]) => hyp2(x, y, p[0], p[1]) < 20)) continue
-        for (const m of o.mechs) {
-          if (m.kind !== "mech" || m.id === b.by) continue
-          if (Math.hypot(m.pos[0] - end[0], m.pos[1] - end[1], m.pos[2] + 4 - end[2]) < 7 && ++this.beamClues >= 2) {
-            this.ffa = true
-            log(`ffa by beam t=${t} by=${b.by} on=${m.id}`)
-          }
-        }
-      }
+      if (e.type === "kill") this.tracks.delete(e.target)
     }
     for (const s of o.sounds) {
       if (["gun", "laser", "laser_charge", "lightning", "mortar", "boost", "step", "jet"].includes(s.kind) && s.dist !== "far") {
@@ -188,17 +163,12 @@ class Brain {
     // ---------- choose target
     const visible = o.mechs.filter((m) => m.kind === "mech")
     let target: Track | null = null
-    let avoid: Track | null = null
     let tScore = 1e9
     for (const tr of this.tracks.values()) {
       const d = hyp2(x, y, tr.pos[0], tr.pos[1])
       const age = t - tr.t
       if (age > 4) continue
       const hitUs = t - (this.attackers.get(tr.id) ?? -99) < 3 ? 50 : 0
-      if (this.ffa && !this.engageable(tr, d, t, o.alive, me.hp / me.max_hp, me.cubes)) {
-        if (age < 1.5 && (!avoid || d < hyp2(x, y, avoid.pos[0], avoid.pos[1]))) avoid = tr
-        continue
-      }
       const stick = tr.id === this.targetId && t - this.targetT < 2 ? 40 : 0
       const s = d + (tr.hp / 1400) * 90 + age * 30 - hitUs - stick
       if (s < tScore) {
@@ -370,23 +340,15 @@ class Brain {
           this.strafeUntil = t + 0.35 + this.rng() * 0.7
         }
         strafe = this.strafeDir
-        let laserCover: [number, number] | null = null
-        if (target.charging && hasLos && map) {
+        // dodge incoming laser: hard strafe
+        if (target.charging) {
           const theirYaw = target.aim[0]
           const toMe = Math.atan2(y - tp[1], x - tp[0])
-          if (Math.abs(wrap(theirYaw - toMe)) < 0.25) {
-            boost = me.energy > (lightS >= 0 ? 45 : 10)
-            // practice: squad focus-fire makes cover-seek too passive; FFA only
-            if (this.ffa) {
-              laserCover = map.coverFrom(x, y, tp[0], tp[1], tp[2] + 8, 40)
-              if (laserCover) mode = "laser-cover"
-            }
-          }
+          if (Math.abs(wrap(theirYaw - toMe)) < 0.25) boost = me.energy > (lightS >= 0 ? 45 : 10)
         }
         const mx = dirx * radial + -diry * strafe * 0.9
         const my = diry * radial + dirx * strafe * 0.9
-        if (laserCover) moveGoal = laserCover
-        else if (map && radial > 0 && !hasLos) {
+        if (map && radial > 0 && !hasLos) {
           map.field(tp[0], tp[1])
           const st = map.fieldFor(tp[0], tp[1], 30) ? map.steer(x, y) : null
           if (st) moveGoal = [x + st[0] * 10 + -diry * strafe * 3, y + st[1] * 10 + dirx * strafe * 3]
@@ -398,46 +360,6 @@ class Brain {
         if (!me.in_zone) moveGoal = null
       }
       void myDps
-    }
-
-    // free-for-all: stay hidden from mechs we choose not to fight
-    if (!target && avoid && map && !zoneGoal) {
-      const ap = avoid.pos
-      mode = "avoid"
-      if (map.los(ap[0], ap[1], ap[2] + 8, x, y, z + 6)) {
-        const cov = map.coverFrom(x, y, ap[0], ap[1], ap[2] + 8, 40)
-        moveGoal = cov ?? [x - (ap[0] - x), y - (ap[1] - y)]
-      } else moveGoal = [x, y]
-      aimYaw = Math.atan2(ap[1] - y, ap[0] - x)
-      aimPitch = 0
-      wantAim = true
-    }
-
-    // free-for-all endgame: sit in cover inside the next circle
-    if (this.ffa && !target && !avoid && !moveGoal && !zoneGoal && o.alive <= 6 && hpFrac > 0.4 && map) {
-      const ang = Math.atan2(y - zn.next_center[1], x - zn.next_center[0])
-      const r = Math.min(zn.next_radius * 0.55, Math.max(12, dNext - 15))
-      const hx = zn.next_center[0] + Math.cos(ang) * r, hy = zn.next_center[1] + Math.sin(ang) * r
-      // prefer a cover spot from the nearest recent track / threat bearing
-      let from: [number, number, number] | null = null
-      let nearest: Track | null = null
-      for (const tr of this.tracks.values()) {
-        if (t - tr.t > 8) continue
-        if (!nearest || hyp2(x, y, tr.pos[0], tr.pos[1]) < hyp2(x, y, nearest.pos[0], nearest.pos[1])) nearest = tr
-      }
-      if (nearest) from = [nearest.pos[0], nearest.pos[1], nearest.pos[2] + 8]
-      else if (this.threatBearing != null && t - this.threatT < 6) {
-        from = [x + Math.cos(this.threatBearing) * 40, y + Math.sin(this.threatBearing) * 40, z + 8]
-      }
-      if (from) {
-        const cov = map.coverFrom(hx, hy, from[0], from[1], from[2], 35)
-        moveGoal = cov ?? [hx, hy]
-      } else moveGoal = [hx, hy]
-      mode = "hold"
-      if (from) {
-        aimYaw = Math.atan2(from[1] - y, from[0] - x)
-        wantAim = true
-      }
     }
 
     // heal: hold still (silent) out of sight until HP is back
@@ -547,9 +469,7 @@ class Brain {
           .filter((n) => hyp2(x, y, n.pos[0], n.pos[1]) < 110 && map?.los(x, y, muzzleZ, n.pos[0], n.pos[1], n.pos[2] + 1.75) !== false)
           .sort((a, b) => hyp2(x, y, a.pos[0], a.pos[1]) - hyp2(x, y, b.pos[0], b.pos[1]))[0]
         const tgt = npc ? { pos: npc.pos, vel: npc.vel, h: 1.75 } : crate ? { pos: crate.pos, vel: [0, 0, 0], h: 1.2 } : null
-        let recentMech = false
-        if (this.ffa) for (const tr of this.tracks.values()) if (t - tr.t < 6 && hyp2(x, y, tr.pos[0], tr.pos[1]) < 200) recentMech = true
-        const unseenAttacker = t - this.mechHitT < 1.5 || recentMech
+        const unseenAttacker = t - this.mechHitT < 1.5
         if (tgt && hpFrac > 0.4 && !unseenAttacker) {
           const dd = hyp2(x, y, tgt.pos[0], tgt.pos[1])
           const tt = dd / 252
@@ -693,16 +613,6 @@ class Brain {
     this.lastHp = me.hp
     if (map) map.pump(Math.max(0, 8 - (performance.now() - t0)))
     return act
-  }
-
-  engageable(tr: Track, d: number, t: number, alive: number, myFrac: number, myCubes: number) {
-    if (t - (this.attackers.get(tr.id) ?? -99) < 4) return true
-    if (tr.id === this.targetId && t - this.targetT < 1) return true
-    if (d < 35 || alive <= 4) return true
-    const frac = tr.hp / tr.maxHp
-    if (frac < 0.45 && d < 120 && myFrac > 0.4) return true
-    if (myFrac > 0.75 && myCubes >= tr.cubes + 3 && d < 70) return true
-    return false
   }
 
   mapGround(x: number, y: number) {
