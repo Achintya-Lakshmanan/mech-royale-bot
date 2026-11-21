@@ -737,10 +737,21 @@ class Brain {
       if (recentlyHit && me.energy > 30) boost = true
     }
 
+    // quiet movement: below sound.step_speed a mech makes no footsteps, so hunters cannot hear it.
+    // Walk silently whenever nothing is urgent (no target, zone safe, not hit recently, not racing for a first weapon or a drop).
+    {
+      const urgent = target != null || !zoneOk || t - this.lastDamageT < 5 || this.mode === "drop" || this.mode === "capture" ||
+        (this.mode.startsWith("loot") && !slots[1])
+      if (!urgent && !boost) {
+        const quiet = ((this.cfg.sound?.step_speed ?? 5) * 0.9) / (me.stats.walk_speed ?? 11.7)
+        const l = Math.hypot(mv[0], mv[1])
+        if (l > quiet) mv = [(mv[0] / l) * quiet, (mv[1] / l) * quiet]
+      }
+    }
     mv = this.wallSafe(pos, mv)
 
     // ---- stuck handling ----
-    const moving = Math.hypot(mv[0], mv[1]) > 0.5
+    const moving = Math.hypot(mv[0], mv[1]) > 0.3
     if (moving && this.posHist.length > 8 && t > this.stuckUntil) {
       const old = this.posHist[0]
       if (t - old.t > 0.9 && hyp2(old.p, pos) < 1.2) {
