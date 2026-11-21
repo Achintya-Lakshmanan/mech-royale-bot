@@ -22,8 +22,8 @@ const V = { regen: true, grow: false }
 // burst ranking from recorded matches: laser > lightning >> mortar
 const WEAPON_RANK: Record<string, number> = { laser: 3, lightning: 2.8, mortar: 1.0, gun: 0 }
 const UPGRADE_RANK = [
-  "armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "laser_damage", "laser_charge",
-  "nanites", "gyros", "lightning_range", "gun_mag", "servos", "capacitor", "reactor", "gun_velocity",
+  "armor", "plating", "gyros", "laser_damage", "lightning_efficiency", "laser_charge", "gun_rate", "gun_damage",
+  "nanites", "lightning_range", "gun_mag", "servos", "capacitor", "reactor", "gun_velocity",
   "jets", "sensors", "mortar_reload", "lightning_chain", "mortar_splash", "mortar_velocity", "laser_pierce",
 ]
 
@@ -69,6 +69,7 @@ class Brain {
   /** recent weapon damage taken: time, attacker, amount */
   dmgLog: { t: number; by: number | null; amt: number }[] = []
   dangerUntil = -99
+  duckUntil = -99
   coverGoal: number[] | null = null
   coverT = -99
 
@@ -125,13 +126,14 @@ class Brain {
   }
 
   /** a nearby walkable, zone-safe point the threat cannot see */
-  coverPoint(obs: Observation, me: V, threat: ActorObs): number[] | null {
+  coverPoint(obs: Observation, me: V, threat: ActorObs, maxR = 55): number[] | null {
     if (!this.map.ok) return null
-    if (this.coverGoal && obs.t - this.coverT < 1.0) return this.coverGoal
+    if (this.coverGoal && obs.t - this.coverT < 1.0 && hyp2(me, this.coverGoal) <= maxR + 3) return this.coverGoal
     const sc = 1 + 0.05 * (threat.cubes ?? 0)
     const te = [threat.pos[0], threat.pos[1], threat.pos[2] + 8 * sc]
     let best: number[] | null = null, bs = -Infinity
     for (const r of [10, 18, 28, 40, 55]) {
+      if (r > maxR) break
       for (let k = 0; k < 16; k++) {
         const a = (k * TAU) / 16
         const x = me[0] + Math.cos(a) * r, y = me[1] + Math.sin(a) * r
@@ -219,7 +221,7 @@ class Brain {
     let tt = 0
     for (let i = 0; i < 3; i++) {
       const d = Math.hypot(px - me.pos[0], py - me.pos[1], pz - mz)
-      tt = d / speed
+      tt = d / speed + 0.05 // the shot leaves up to 0.1 s after this observation
       px = tgt.pos[0] + tgt.vel[0] * tt
       py = tgt.pos[1] + tgt.vel[1] * tt
       pz = tgt.pos[2] + hz + (tgt.vel[2] ?? 0) * tt * 0.5
@@ -496,7 +498,16 @@ class Brain {
       if (!tLos && !retreating && tDist > 20) {
         mv = this.navTo(obs, pos, target.pos, 4)
       }
-      const cover = retreating && V.regen ? this.coverPoint(obs, pos, target) : null
+      // duck behind nearby cover while the gun reloads and nothing else can fire
+      const gunW = gunIdx >= 0 ? slots[gunIdx]! : null
+      const laserReady = laserIdx >= 0 && (slots[laserIdx]!.cooldown ?? 0) < 0.6
+      const lightReady = lightIdx >= 0 && tDist < 45 && me.energy > 15
+      if (!retreating && tLos && tDist < 100 && gunW != null && (gunW.reload ?? 0) > 0.6 && !laserReady && !lightReady)
+        this.duckUntil = t + (gunW.reload ?? 0) - 0.2
+      const reloadDuck = !retreating && t < this.duckUntil
+      const cover = retreating && V.regen ? this.coverPoint(obs, pos, target)
+        : reloadDuck ? this.coverPoint(obs, pos, target, 18) : null
+      if (reloadDuck && cover) this.mode = "duck"
       if (cover) {
         mv = this.navTo(obs, pos, cover, 1.5)
         boost = me.energy > 15 && hyp2(pos, cover) > 6
