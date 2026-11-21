@@ -454,6 +454,7 @@ class Brain {
         }
       }
     }
+    this.ffa = false // diagnostic: always practice
     const hunt = t > 20
     if (hunt !== this.huntLog) { this.huntLog = hunt; console.error(`t=${t.toFixed(1)} hunt=${hunt} ffa=${this.ffa} alive=${obs.alive} kills=${this.kills}`) }
     this.posHist.push({ t, p: pos.slice() })
