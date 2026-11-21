@@ -580,12 +580,14 @@ class Brain {
         const charge = w.charge ?? 0
         const full = (ls.charge ?? 0.75) * 0.97
         const aligned = aimErrOk(hit.yaw, hit.pitch, hit.dist, size * 0.9)
-        if (a.dist < (ls.range ?? 280) * 0.95 && (los || charge > 0)) {
+        // pre-charge on a hunter that is close but out of sight, so the first beam is instant when it shows
+        const preCharge = !los && shootAt.kind === "mech" && a.dist < 90 && !lightClose
+        if (a.dist < (ls.range ?? 280) * 0.95 && (los || charge > 0 || preCharge)) {
           if (charge > 0) {
             // keep holding until full and aligned and visible
             fire[laserIdx] = !(charge >= full && aligned && los)
-            if (!los && charge >= full + 0.3) fire[laserIdx] = false // target hid: don't crawl at half speed until it times out
-          } else if ((w.cooldown ?? 0) <= 0.1 && los && !farming) {
+            if (!los && charge >= full + (preCharge ? 1.6 : 0.3)) fire[laserIdx] = false // target hid: don't crawl at half speed until it times out
+          } else if ((w.cooldown ?? 0) <= 0.1 && (los || preCharge) && !farming) {
             fire[laserIdx] = true
           } else if (farming && (w.cooldown ?? 0) <= 0.1 && los) fire[laserIdx] = true
         } else if (charge > 0) fire[laserIdx] = charge < full // out of view: finish charging, then let it go
