@@ -361,7 +361,7 @@ async def main():
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--start-timeout", type=float, default=120, help="abort the game if it has not started by then")
     ap.add_argument("--first-join", type=float, default=20)
-    ap.add_argument("--alive-per-kill", type=int, default=1, choices=[0, 1, 2],
+    ap.add_argument("--alive-per-kill", type=int, default=0, choices=[0, 1, 2],
                     help="alive active hunters = 1 + K * (test bot kills)")
     ap.add_argument("--all-at", type=float, default=240)
     ap.add_argument("--defend-s", type=float, default=0, help="inactive hunters fight back for N s when hit (0: passive)")
