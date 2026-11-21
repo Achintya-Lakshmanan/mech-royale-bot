@@ -399,7 +399,7 @@ class Brain {
     const has = (k: string) => kinds.includes(k as never)
     const hpFrac = me.hp / me.max_hp
     // after a fight, let HP regenerate (5 s without dealing damage) before shooting drones or crates
-    const healing = hpFrac < 0.85
+    const healing = hpFrac < (!this.ffa && obs.t > 30 ? 0.5 : 0.85) // practice: keep farming down to 50% HP
 
     // ---- bookkeeping ----
     for (const ev of obs.events) {
@@ -553,11 +553,12 @@ class Brain {
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
         // ambush: let hunters come to us; engage only inside 70 m or when they open fire
-        if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120) || (hunt && d < 200 && losTo(e) && fightOdds(e).p > 0.5))) continue
+        if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120) || (hunt && d < 240 && losTo(e) && fightOdds(e).p > 0.5))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
       if (e.id === this.targetId) s -= visible ? 60 : 25
+      if (hunt && e.id === this.targetId) s -= 140 + ((e.hp ?? 1400) < 0.3 * (e.max_hp ?? 1400) ? 400 : 0) // practice: stay on one target until it dies
       if (canKill && visible) s -= 120 // finish what we can finish
       // is it aiming at us?
       const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
@@ -614,7 +615,7 @@ class Brain {
         const d = hyp2(pos, n.pos)
         const hittingUs = t - (this.droneAttackers.get(n.id) ?? -99) < 4
         const dd = hittingUs ? d - 60 : d // prefer the drone that is shooting us
-        if (d < (hittingUs ? 100 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && !healing && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
+        if (d < (hittingUs ? 100 : hunt ? 150 : V.grow ? 110 : 70) && dd < bd && (hittingUs || (!this.ffa && !healing && !this.retreatMode)) /* free-for-all: drones only in self-defence */ && losTo(n)) { bd = dd; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -691,7 +692,7 @@ class Brain {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
       for (const c of obs.crates) {
         const d = hyp2(pos, c.pos)
-        if (d < (V.grow ? 80 : 55) && d < bd && Math.abs(c.pos[2] - this.map.ground(c.pos[0], c.pos[1])) < 3 &&
+        if (d < (hunt ? 120 : V.grow ? 80 : 55) && d < bd && Math.abs(c.pos[2] - this.map.ground(c.pos[0], c.pos[1])) < 3 &&
           this.map.los(muzzle, [c.pos[0], c.pos[1], c.pos[2] + 1.2])) { bd = d; bc = c }
       }
       if (bc && gunIdx >= 0) {
