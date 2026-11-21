@@ -819,6 +819,14 @@ class Brain {
           break
         }
       }
+      if (hunt && !retreating) {
+        let r = hpFrac <= 0.5 ? 40 : 70, bc: number[] | null = null
+        for (const c of obs.cubes) {
+          const d = hyp2(pos, c.pos)
+          if (d < r && Math.abs(c.pos[2] - pos[2]) < 4) { r = d; bc = c.pos }
+        }
+        if (bc) { mv = this.navTo(obs, pos, bc, 0.5); this.mode = "fight:cube" }
+      }
       // stay inside the zone
       if (!zoneOk) {
         const zg = this.zoneGoal(obs, pos)
