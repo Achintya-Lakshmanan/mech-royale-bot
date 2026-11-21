@@ -102,6 +102,7 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
+  dropSlot = 1
   peekGoal: number[] | null = null
   peekT = -99
   /** free-for-all detected (practice house bots never kill each other): switch to the hiding, ghost behaviour */
@@ -201,7 +202,10 @@ class Brain {
   bestPickup(obs: Observation, pos: V, maxD: number) {
     const slots = obs.self.weapons
     const has = (k: string) => slots.some((w) => w && w.kind === k)
-    const myWorst = slots[1] ? WEAPON_RANK[slots[1].kind] ?? 0 : -1
+    // carry two power weapons: the gun is the first thing to give up
+    const rk = (i: number) => (slots[i] ? WEAPON_RANK[slots[i]!.kind] ?? 0 : -1)
+    this.dropSlot = rk(0) <= rk(1) ? 0 : 1
+    const myWorst = rk(this.dropSlot)
     let bp: { id: number; kind: string; pos: number[] } | null = null, bs = -Infinity
     for (const p of this.knownPickups.values()) {
       if (has(p.kind)) continue
@@ -778,7 +782,7 @@ class Brain {
           const d = hyp2(pos, bp.pos)
           if (d < (this.cfg.loot.pickup_radius ?? 4) - 0.6 && Math.abs(bp.pos[2] - pos[2]) < 3.5) {
             act.take = bp.id
-            if (slots[1]) act.drop = 1
+            if (slots[0] && slots[1]) act.drop = this.dropSlot
           }
           goal = [bp.pos[0], bp.pos[1]]
           this.mode = "loot " + bp.kind
