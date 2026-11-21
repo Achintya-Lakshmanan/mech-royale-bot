@@ -420,21 +420,42 @@ class Brain {
       this.map.los(muzzle, [m.pos[0], m.pos[1], m.pos[2] + (m.kind === "mech" ? 8 : 3)])
 
     // ---- choose target mech ----
+    // magazine-aware finishing: how much damage can we put out in the next couple of seconds?
+    const burstAt = (d: number): number => {
+      const scale = 1 + (this.cfg.cubes?.damage_per_cube ?? 0.04) * Math.min(me.cubes ?? 0, this.cfg.cubes?.stat_cap ?? 10)
+      let b = 0
+      for (const w of slots) {
+        if (!w) continue
+        const ws = w.stats as Record<string, number>
+        if (w.kind === "gun" && (w.reload ?? 0) <= 0 && d < (ws.range ?? 230)) {
+          const hit = d < 50 ? 0.8 : d < 100 ? 0.6 : 0.35 // measured hit rates by distance
+          b += Math.min(w.ammo ?? 0, 9) * (ws.damage ?? 45) * hit
+        } else if (w.kind === "laser" && (w.cooldown ?? 0) < 0.8 && d < (ws.range ?? 280)) {
+          b += ws.damage ?? 315
+        } else if (w.kind === "lightning" && d < (ws.range ?? 45)) {
+          b += Math.min(8, Math.floor(me.energy / (ws.energy ?? 3))) * (ws.damage ?? 60)
+        }
+      }
+      return b * scale
+    }
+    const killable = (e: ActorObs) => (e.hp ?? 1400) <= burstAt(hyp2(pos, e.pos))
     let target: ActorObs | null = null
     let bestScore = Infinity
     for (const e of enemies) {
       const d = hyp2(pos, e.pos)
+      const canKill = killable(e) && d < 150
       // ghost: leave far mechs alone unless they are fighting us, about to laser us, or nearly dead
       // (a mech within 60 m multiplies our death rate ~6x in recorded matches; picking fights does not pay)
       {
         const attacking = t - (this.mechAttackers.get(e.id) ?? -99) < 4
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
-        if (!(attacking || d < 60 || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
+        if (!(attacking || d < 60 || canKill || (e.charging && aimedAtMe && d < 120) || ((e.hp ?? 1400) < 350 && d < 120))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.04 - (visible ? 40 : 0)
       if (e.id === this.targetId) s -= 25
+      if (canKill && visible) s -= 120 // finish what we can finish
       // is it aiming at us?
       const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
       if (Math.abs(wrap(toMe - e.aim[0])) < 0.3) s -= 20
@@ -576,7 +597,7 @@ class Brain {
     let retreating = target != null && (hpFrac < 0.3 || (hpFrac < 0.45 && (target.hp ?? 0) > me.hp * 1.3))
     if (V.regen && target) {
       // heal behind cover, unless the enemy is nearly dead and in our sights
-      retreating = this.retreatMode && !(tLos && (target.hp ?? 1400) < me.hp * 0.5)
+      retreating = this.retreatMode && !(tLos && ((target.hp ?? 1400) < me.hp * 0.5 || killable(target)))
       // regen needs 5 s without dealing damage: hold fire unless we are in contact
       if (retreating && !tLos) { fire[0] = false; fire[1] = false }
     }
