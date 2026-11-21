@@ -625,7 +625,7 @@ class Brain {
       })()
       const lw = laserIdx >= 0 ? slots[laserIdx]! : null
       const lightClose = lightIdx >= 0 && a.dist < 40
-      const laserActive = !!lw && !lightClose && ((lw.charge ?? 0) > 0 || ((lw.cooldown ?? 0) <= 0.1 && a.dist < ((lw.stats as Record<string, number>).range ?? 280) * 0.95))
+      const laserActive = !!lw && !lightClose && (lw.charge ?? 0) > ((lw.stats as Record<string, number>).charge ?? 0.75) * 0.97 - 0.2 // laser takes the aim only just before release; the gun keeps firing while it charges
       if (laserActive) { aimYaw = hit.yaw; aimPitch = hit.pitch }
       haveAim = true
       const los = shootAt === target ? tLos : true
