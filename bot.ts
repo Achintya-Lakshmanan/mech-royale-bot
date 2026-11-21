@@ -659,16 +659,20 @@ class Brain {
       // lightning only fires inside 45 m, but charging in to brawl got us killed: hold gun range unless the laser is ours
       if (lightIdx >= 0 && laserIdx >= 0 && me.energy > 25 && tDist < 50) want = 30
       else if (lightIdx >= 0 && laserIdx < 0) want = 60
-      else if (laserIdx >= 0) want = 95
+      else if (laserIdx >= 0) want = 180 // sniper: house aim spreads at range, our laser is instant and exact
       else if (mortarIdx >= 0) want = 85
       // gun only against a laser: our gun misses most shots at 80 m while the laser does not; close in
       const outgunned = laserIdx < 0 && lightIdx < 0 && (target.weapons ?? []).includes("laser")
       if (outgunned) want = 30
       if (retreating) want = 400
+      const finishingNow = tLos && ((target.hp ?? 1400) <= burstAt(tDist) || (target.hp ?? 1400) < 0.2 * (target.max_hp ?? 1400))
       const [rx, ry] = norm2(target.pos[0] - pos[0], target.pos[1] - pos[1])
       let radial = 0
       if (tDist > want + 12) radial = 1
       else if (tDist < want - 12) radial = -1
+      // sniper: never let a hunter close in; back away (boosting) while the laser recharges
+      const kite = laserIdx >= 0 && tDist < 130 && !finishingNow
+      if (kite) { radial = -1; if (me.energy > 30) boost = true }
       if (retreating) radial = -1
       if (t > this.strafeUntil) {
         this.strafeSign = this.rand() < 0.5 ? -1 : 1
@@ -678,7 +682,7 @@ class Brain {
       const sw = retreating ? 0.5 : 0.9
       mv = norm2(rx * radial + tx * sw, ry * radial + ty * sw)
       // if target not visible and we are not retreating, path toward it instead
-      if (!tLos && !retreating && tDist > 20) {
+      if (!tLos && !retreating && tDist > (laserIdx >= 0 ? 200 : 20)) {
         mv = this.navTo(obs, pos, target.pos, 4)
       }
       const cover = retreating && V.regen ? this.coverPoint(obs, pos, target) : null
@@ -693,8 +697,8 @@ class Brain {
         boost = me.energy > 15
       }
       // gun only and the enemy is far and not hurting us: get a weapon first
-      if (!retreating && !slots[1] && tDist > 90 && t - this.lastDamageT > 3) {
-        const bp = this.bestPickup(obs, pos, 200)
+      if (!retreating && laserIdx < 0 && tDist > 60 && t - this.lastDamageT > 3) {
+        const bp = this.bestPickup(obs, pos, 400)
         if (bp) {
           mv = this.navTo(obs, pos, bp.pos, 1.0)
           this.mode = "loot " + bp.kind
@@ -771,7 +775,7 @@ class Brain {
       }
       // weapon pickups: with only the gun, a second weapon is worth a long walk
       if (!goal && this.mode !== "capture") {
-        const bp = this.bestPickup(obs, pos, slots[1] ? 130 : 260)
+        const bp = this.bestPickup(obs, pos, laserIdx >= 0 ? 130 : 400)
         if (bp) {
           const d = hyp2(pos, bp.pos)
           if (d < (this.cfg.loot.pickup_radius ?? 4) - 0.6 && Math.abs(bp.pos[2] - pos[2]) < 3.5) {
@@ -780,7 +784,7 @@ class Brain {
           }
           goal = [bp.pos[0], bp.pos[1]]
           this.mode = "loot " + bp.kind
-          if (!slots[1] && d > 30 && me.energy > 40) boost = true
+          if (laserIdx < 0 && d > 30 && me.energy > 40) boost = true
         }
       }
       // cubes
