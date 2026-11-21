@@ -469,8 +469,15 @@ class Brain {
     }
     this.targetId = target ? target.id : -1
     if (V.regen) {
-      if (hpFrac < 0.45) this.retreatMode = true
-      if (hpFrac > 0.85) this.retreatMode = false
+      // retreat only when clearly losing: caution cost other bots 0.15-0.5 in practice
+      let shooters = 0
+      for (const e of enemies) {
+        const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
+        if (hyp2(pos, e.pos) < 230 && Math.abs(wrap(toMe - e.aim[0])) < 0.3 && losTo(e)) shooters++
+      }
+      const tFrac = target ? (target.hp ?? 1400) / (target.max_hp ?? 1400) : 1
+      if ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (shooters >= 2 && hpFrac < 0.55) || (shooters >= 3 && hpFrac < 0.8)) this.retreatMode = true
+      if (hpFrac > 0.85 || (t - this.lastDamageT > 8 && hpFrac > 0.6)) this.retreatMode = false
     }
     const tDist = target ? hyp2(pos, target.pos) : Infinity
     const tLos = target ? losTo(target) : false
@@ -625,7 +632,7 @@ class Brain {
       if (retreating) radial = -1
       if (t > this.strafeUntil) {
         this.strafeSign = this.rand() < 0.5 ? -1 : 1
-        this.strafeUntil = t + 0.8 + this.rand() * 1.6
+        this.strafeUntil = t + 0.3 + this.rand() * 0.5
       }
       const tx = -ry * this.strafeSign, ty = rx * this.strafeSign
       const sw = retreating ? 0.5 : 0.9
@@ -661,8 +668,8 @@ class Brain {
         const c = this.coverPoint(obs, pos, th, 30)
         if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
       }
-      // dodge: an enemy is charging a laser at us; step behind cover a few metres away
-      if (!retreating) {
+      // dodge: an enemy is charging a laser at us; in free-for-all step behind cover a few metres away
+      if (!retreating && this.ffa) {
         for (const e of enemies) {
           if (!e.charging) continue
           const dE = hyp2(pos, e.pos)
@@ -769,10 +776,62 @@ class Brain {
     {
       const urgent = target != null || !zoneOk || t - this.lastDamageT < 5 || this.mode === "drop" || this.mode === "capture" ||
         (this.mode.startsWith("loot") && !slots[1])
-      if (!urgent && !boost) {
+      if (this.ffa && !urgent && !boost) {
         const quiet = ((this.cfg.sound?.step_speed ?? 5) * 0.9) / (me.stats.walk_speed ?? 11.7)
         const l = Math.hypot(mv[0], mv[1])
         if (l > quiet) mv = [(mv[0] / l) * quiet, (mv[1] / l) * quiet]
+      }
+    }
+    // dodge: sidestep bullets about to hit, leave mortar landing spots, step off a charging laser's line
+    {
+      let dx = 0, dy = 0, urgent = false
+      const sc = 1 + 0.05 * (me.cubes ?? 0)
+      const cz = pos[2] + 4.5 * sc
+      const g = (this.cfg.weapons?.mortar?.gravity as number) ?? 22
+      for (const p of obs.projectiles) {
+        const [px, py, pz] = p.pos, [vx, vy, vz] = p.vel
+        if (p.kind === "mortar") {
+          const a = -0.5 * g, b = vz, c = pz - pos[2]
+          const disc = b * b - 4 * a * c
+          if (disc < 0) continue
+          const tl = (-b - Math.sqrt(disc)) / (2 * a)
+          if (tl < 0 || tl > 3) continue
+          const lx = px + vx * tl, ly = py + vy * tl
+          if (Math.hypot(pos[0] + me.vel[0] * tl - lx, pos[1] + me.vel[1] * tl - ly) < 11) {
+            const l = Math.max(0.5, Math.hypot(pos[0] - lx, pos[1] - ly))
+            dx += (pos[0] - lx) / l; dy += (pos[1] - ly) / l; urgent = true
+          }
+          continue
+        }
+        const rx = pos[0] - px, ry = pos[1] - py, rz = cz - pz
+        const vv = vx * vx + vy * vy + vz * vz
+        if (vv < 1) continue
+        const tc = (rx * vx + ry * vy + rz * vz) / vv
+        if (tc < 0 || tc > 0.9) continue
+        const mx = px + vx * tc - pos[0], my = py + vy * tc - pos[1], mz = pz + vz * tc - cz
+        if (Math.hypot(mx, my, mz * 0.5) > 3.6 * sc) continue
+        const hv = Math.hypot(vx, vy) || 1
+        let nx = -vy / hv, ny = vx / hv
+        if (nx * -mx + ny * -my < 0) { nx = -nx; ny = -ny }
+        dx += nx; dy += ny; urgent = true
+      }
+      if (!this.ffa) {
+        for (const e of enemies) {
+          if (!e.charging) continue
+          const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
+          if (Math.abs(wrap(e.aim[0] - toMe)) > Math.max(0.06, Math.atan2(6, hyp2(pos, e.pos))) || !losTo(e)) continue
+          dx += -Math.sin(toMe) * this.strafeSign * 1.5; dy += Math.cos(toMe) * this.strafeSign * 1.5; urgent = true
+        }
+      }
+      if (urgent && this.mode !== "capture") {
+        const l = Math.hypot(dx, dy)
+        if (l > 0.01) {
+          mv = [mv[0] * 0.3 + (dx / l) * 0.95, mv[1] * 0.3 + (dy / l) * 0.95]
+          const ml = Math.hypot(mv[0], mv[1])
+          if (ml > 1) mv = [mv[0] / ml, mv[1] / ml]
+          if (me.energy > (lightIdx >= 0 && target ? 50 : 25)) boost = true
+          this.mode += "+dodge"
+        }
       }
     }
     mv = this.wallSafe(pos, mv)
