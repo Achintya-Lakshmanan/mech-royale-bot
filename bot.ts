@@ -674,7 +674,7 @@ class Brain {
       if (retreating) radial = -1
       if (t > this.strafeUntil) {
         this.strafeSign = this.rand() < 0.5 ? -1 : 1
-        this.strafeUntil = t + 0.3 + this.rand() * 0.5
+        this.strafeUntil = t + 0.8 + this.rand() * 1.6
       }
       const tx = -ry * this.strafeSign, ty = rx * this.strafeSign
       const sw = retreating ? 0.5 : 0.9
