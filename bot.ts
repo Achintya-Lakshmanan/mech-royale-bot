@@ -487,7 +487,7 @@ class Brain {
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
         // ambush: let hunters come to us; engage only inside 70 m or when they open fire
-        if (!(attacking || d < (hpFrac > 0.7 ? 70 : 35) || (e.charging && aimedAtMe && d < 120))) continue
+        if (!(attacking || d < (hpFrac > 0.7 ? 80 : 35) || (e.charging && aimedAtMe && d < 120))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
