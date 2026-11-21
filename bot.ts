@@ -819,6 +819,17 @@ class Brain {
           break
         }
       }
+      // practice: hurt in a fight and a supply drop is near: go stand in it (full HP and energy, 3 cubes)
+      if (hunt && obs.drops && (retreating || hpFrac < 0.7)) {
+        for (const d of obs.drops) {
+          const dd = hyp2(pos, d.pos)
+          if (dd < 300 && d.lands_in < dd / 11 + 3 && this.zoneSafe(obs, d.pos, 5) && (d.holder == null || d.holder === me.id)) {
+            if (dd > d.radius * 0.5) { mv = this.navTo(obs, pos, d.pos, 1); boost = me.energy > 15 } else mv = [0, 0]
+            this.mode = "fight+drop"
+            break
+          }
+        }
+      }
       // stay inside the zone
       if (!zoneOk) {
         const zg = this.zoneGoal(obs, pos)
@@ -842,7 +853,7 @@ class Brain {
       if (!goal && obs.drops) {
         for (const d of obs.drops) {
           const dd = hyp2(pos, d.pos)
-          if (dd < 220 && d.lands_in < dd / 11 + 5 && this.zoneSafe(obs, d.pos, 5) && (d.holder == null || d.holder === me.id)) {
+          if (dd < (hunt ? 350 : 220) && d.lands_in < dd / 11 + 5 && this.zoneSafe(obs, d.pos, 5) && (d.holder == null || d.holder === me.id)) {
             goal = [d.pos[0], d.pos[1]]
             this.mode = "drop"
             if (dd > 30 && me.energy > 40) boost = true
