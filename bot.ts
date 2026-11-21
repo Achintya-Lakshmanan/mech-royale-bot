@@ -352,8 +352,9 @@ class Brain {
     for (let i = 0; i < 3; i++) {
       const d = Math.hypot(px - me.pos[0], py - me.pos[1], pz - mz)
       tt = d / speed
-      px = tgt.pos[0] + tgt.vel[0] * tt
-      py = tgt.pos[1] + tgt.vel[1] * tt
+      const tl = tt + (speed < 1e8 ? 0.05 : 0) // bullets: also lead by our ~0.05 s decision latency
+      px = tgt.pos[0] + tgt.vel[0] * tl
+      py = tgt.pos[1] + tgt.vel[1] * tl
       pz = tgt.pos[2] + hz + (tgt.vel[2] ?? 0) * tt * 0.5
     }
     const dx = px - me.pos[0], dy = py - me.pos[1]
