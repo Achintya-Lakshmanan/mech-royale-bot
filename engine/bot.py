@@ -1002,7 +1002,7 @@ class Bot:
             self.mode = mode
         if mode == "fight":
             d = target["d"]
-            pref = 110 if has_laser else (28 if has_light else 85)
+            pref = 150 if has_laser else (28 if has_light else 85)  # weaker house bots stop hitting at ~145 m
             if has_light and has_laser and d < 60:
                 pref = 28
             if finishing:
