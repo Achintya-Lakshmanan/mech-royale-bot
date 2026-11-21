@@ -16,6 +16,9 @@ const norm2 = (x: number, y: number): [number, number] => {
   return l < 1e-6 ? [0, 0] : [x / l, y / l]
 }
 
+/** experiment switches: regen = disengage to cover and heal; grow = farm drones/crates/cubes more widely */
+const V = { regen: true, grow: true }
+
 const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.6, mortar: 1.4, gun: 0 }
 const UPGRADE_RANK = [
   "armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "laser_damage", "laser_charge",
@@ -61,6 +64,9 @@ class Brain {
   crateTarget = -1
   scanPhase = 0
   mode = ""
+  retreatMode = false
+  coverGoal: number[] | null = null
+  coverT = -99
 
   constructor(hello: Hello) {
     this.cfg = hello.config
@@ -112,6 +118,31 @@ class Brain {
     const keep = Math.min(r * 0.45, d)
     const [ux, uy] = norm2(me[0] - nc[0], me[1] - nc[1])
     return [nc[0] + ux * keep, nc[1] + uy * keep]
+  }
+
+  /** a nearby walkable, zone-safe point the threat cannot see */
+  coverPoint(obs: Observation, me: V, threat: ActorObs): number[] | null {
+    if (!this.map.ok) return null
+    if (this.coverGoal && obs.t - this.coverT < 1.0) return this.coverGoal
+    const sc = 1 + 0.05 * (threat.cubes ?? 0)
+    const te = [threat.pos[0], threat.pos[1], threat.pos[2] + 8 * sc]
+    let best: number[] | null = null, bs = -Infinity
+    for (const r of [10, 18, 28, 40, 55]) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k * TAU) / 16
+        const x = me[0] + Math.cos(a) * r, y = me[1] + Math.sin(a) * r
+        if (this.map.clearAt(x, y) < 3) continue
+        if (!this.zoneSafe(obs, [x, y], 12)) continue
+        const gz = this.map.ground(x, y)
+        if (this.map.los(te, [x, y, gz + 4.5]) || this.map.los(te, [x, y, gz + 9])) continue
+        let s = Math.min(hyp2([x, y], threat.pos), 120) * 0.4 - r
+        if (!this.map.walkLine(me[0], me[1], x, y, 2)) s -= 25
+        if (s > bs) { bs = s; best = [x, y] }
+      }
+    }
+    this.coverGoal = best
+    this.coverT = obs.t
+    return best
   }
 
   // ---------- navigation ----------
@@ -285,6 +316,10 @@ class Brain {
       if (s < bestScore) { bestScore = s; target = e }
     }
     this.targetId = target ? target.id : -1
+    if (V.regen) {
+      if (hpFrac < 0.45) this.retreatMode = true
+      if (hpFrac > 0.85) this.retreatMode = false
+    }
     const tDist = target ? hyp2(pos, target.pos) : Infinity
     const tLos = target ? losTo(target) : false
 
@@ -312,7 +347,7 @@ class Brain {
       let bn: ActorObs | null = null, bd = Infinity
       for (const n of npcs) {
         const d = hyp2(pos, n.pos)
-        if (d < 70 && d < bd && hpFrac > 0.45 && losTo(n)) { bd = d; bn = n }
+        if (d < (V.grow ? 110 : 70) && d < bd && hpFrac > 0.45 && !this.retreatMode && losTo(n)) { bd = d; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -376,11 +411,11 @@ class Brain {
     }
 
     // crates when idle
-    if (!shootAt) {
+    if (!shootAt && !this.retreatMode) {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
       for (const c of obs.crates) {
         const d = hyp2(pos, c.pos)
-        if (d < 55 && d < bd && Math.abs(c.pos[2] - this.map.ground(c.pos[0], c.pos[1])) < 3 &&
+        if (d < (V.grow ? 80 : 55) && d < bd && Math.abs(c.pos[2] - this.map.ground(c.pos[0], c.pos[1])) < 3 &&
           this.map.los(muzzle, [c.pos[0], c.pos[1], c.pos[2] + 1.2])) { bd = d; bc = c }
       }
       if (bc && gunIdx >= 0) {
@@ -411,7 +446,13 @@ class Brain {
     const inZoneNow = me.in_zone
     const recentlyHit = t - this.lastDamageT < 3
 
-    const retreating = target != null && (hpFrac < 0.3 || (hpFrac < 0.45 && (target.hp ?? 0) > me.hp * 1.3))
+    let retreating = target != null && (hpFrac < 0.3 || (hpFrac < 0.45 && (target.hp ?? 0) > me.hp * 1.3))
+    if (V.regen && target) {
+      // heal behind cover, unless the enemy is nearly dead and in our sights
+      retreating = this.retreatMode && !(tLos && (target.hp ?? 1400) < me.hp * 0.5)
+      // regen needs 5 s without dealing damage: hold fire unless we are in contact
+      if (retreating && !tLos) { fire[0] = false; fire[1] = false }
+    }
     if (target) {
       this.mode = retreating ? "retreat" : "fight"
       // preferred range depends on weapons
@@ -436,7 +477,11 @@ class Brain {
       if (!tLos && !retreating && tDist > 20) {
         mv = this.navTo(obs, pos, target.pos, 4)
       }
-      if (retreating) {
+      const cover = retreating && V.regen ? this.coverPoint(obs, pos, target) : null
+      if (cover) {
+        mv = this.navTo(obs, pos, cover, 1.5)
+        boost = me.energy > 15 && hyp2(pos, cover) > 6
+      } else if (retreating) {
         // retreat toward zone goal, away from target
         const zg = this.zoneGoal(obs, pos)
         const toZ = this.navTo(obs, pos, zg, 10)
@@ -487,7 +532,7 @@ class Brain {
           const d = hyp2(pos, p.pos)
           const onRoof = p.pos[2] - this.map.ground(p.pos[0], p.pos[1]) > 3
           if (onRoof && d > 6) continue
-          if (d > 130 || !this.zoneSafe(obs, p.pos, 5)) continue
+          if (d > (V.grow ? 200 : 130) || !this.zoneSafe(obs, p.pos, 5)) continue
           const s = r * 30 - d
           if (s > bs) { bs = s; bp = p }
         }
@@ -507,10 +552,19 @@ class Brain {
         for (const c of obs.cubes) {
           const d = hyp2(pos, c.pos)
           const onRoof = c.pos[2] - this.map.ground(c.pos[0], c.pos[1]) > 3
-          if (onRoof || d > 90 || !this.zoneSafe(obs, c.pos, 5)) continue
+          if (onRoof || d > (V.grow ? 160 : 90) || !this.zoneSafe(obs, c.pos, 5)) continue
           if (d < bd) { bd = d; bc = c }
         }
         if (bc) { goal = [bc.pos[0], bc.pos[1]]; this.mode = "cube" }
+      }
+      // grow: walk to visible crates to break them
+      if (V.grow && !goal && !shootAt && !this.retreatMode && this.mode !== "capture") {
+        let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
+        for (const c of obs.crates) {
+          const d = hyp2(pos, c.pos)
+          if (d < 150 && d > 30 && d < bd && Math.abs(c.pos[2] - this.map.ground(c.pos[0], c.pos[1])) < 3 && this.zoneSafe(obs, c.pos, 5)) { bd = d; bc = c }
+        }
+        if (bc) { goal = [bc.pos[0], bc.pos[1]]; this.mode = "crate" }
       }
       // npc farming: approach to lightning range or hold
       if (!goal && shootAt && farming) {
