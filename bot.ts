@@ -102,6 +102,7 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
+  killT = -99
   peekGoal: number[] | null = null
   peekT = -99
   /** free-for-all detected (practice house bots never kill each other): switch to the hiding, ghost behaviour */
@@ -417,7 +418,7 @@ class Brain {
         }
       }
       if (ev.type === "take_failed" || ev.type === "took") this.path = null
-      if (ev.type === "kill") this.kills++
+      if (ev.type === "kill") { this.kills++; this.killT = t }
       if (ev.type === "took" || (ev.type === "take_failed" && (ev.reason === "gone" || ev.reason === "have"))) this.knownPickups.delete(ev.id)
     }
     for (const s of obs.sounds) {
@@ -553,6 +554,8 @@ class Brain {
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
         // ambush: let hunters come to us; engage only inside 70 m or when they open fire
+        // practice: for 30 s after a kill, while hurt and not under fire, let HP regenerate instead of starting the next fight
+        if (hunt && t - this.killT < 30 && hpFrac < 0.9 && t - this.lastDamageT > 1 && !attacking && d > 35) continue
         if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120) || (hunt && d < 200 && losTo(e) && fightOdds(e).p > 0.5))) continue
       }
       const visible = losTo(e)
