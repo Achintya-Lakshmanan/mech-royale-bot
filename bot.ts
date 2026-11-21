@@ -19,11 +19,10 @@ const norm2 = (x: number, y: number): [number, number] => {
 /** experiment switches: regen = disengage to cover and heal; grow = farm drones/crates/cubes more widely */
 const V = { regen: true, grow: false }
 
-// burst ranking from recorded matches: laser > lightning >> mortar
-const WEAPON_RANK: Record<string, number> = { laser: 3, lightning: 2.8, mortar: 1.0, gun: 0 }
+const WEAPON_RANK: Record<string, number> = { lightning: 3, laser: 2.6, mortar: 1.4, gun: 0 }
 const UPGRADE_RANK = [
-  "armor", "plating", "gyros", "laser_damage", "lightning_efficiency", "laser_charge", "gun_rate", "gun_damage",
-  "nanites", "lightning_range", "gun_mag", "servos", "capacitor", "reactor", "gun_velocity",
+  "armor", "plating", "lightning_efficiency", "gun_rate", "gun_damage", "laser_damage", "laser_charge",
+  "nanites", "gyros", "lightning_range", "gun_mag", "servos", "capacitor", "reactor", "gun_velocity",
   "jets", "sensors", "mortar_reload", "lightning_chain", "mortar_splash", "mortar_velocity", "laser_pierce",
 ]
 
@@ -66,10 +65,6 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
-  /** recent weapon damage taken: time, attacker, amount */
-  dmgLog: { t: number; by: number | null; amt: number }[] = []
-  dangerUntil = -99
-  duckUntil = -99
   coverGoal: number[] | null = null
   coverT = -99
 
@@ -126,14 +121,13 @@ class Brain {
   }
 
   /** a nearby walkable, zone-safe point the threat cannot see */
-  coverPoint(obs: Observation, me: V, threat: ActorObs, maxR = 55): number[] | null {
+  coverPoint(obs: Observation, me: V, threat: ActorObs): number[] | null {
     if (!this.map.ok) return null
-    if (this.coverGoal && obs.t - this.coverT < 1.0 && hyp2(me, this.coverGoal) <= maxR + 3) return this.coverGoal
+    if (this.coverGoal && obs.t - this.coverT < 1.0) return this.coverGoal
     const sc = 1 + 0.05 * (threat.cubes ?? 0)
     const te = [threat.pos[0], threat.pos[1], threat.pos[2] + 8 * sc]
     let best: number[] | null = null, bs = -Infinity
     for (const r of [10, 18, 28, 40, 55]) {
-      if (r > maxR) break
       for (let k = 0; k < 16; k++) {
         const a = (k * TAU) / 16
         const x = me[0] + Math.cos(a) * r, y = me[1] + Math.sin(a) * r
@@ -221,7 +215,7 @@ class Brain {
     let tt = 0
     for (let i = 0; i < 3; i++) {
       const d = Math.hypot(px - me.pos[0], py - me.pos[1], pz - mz)
-      tt = d / speed + 0.05 // the shot leaves up to 0.1 s after this observation
+      tt = d / speed
       px = tgt.pos[0] + tgt.vel[0] * tt
       py = tgt.pos[1] + tgt.vel[1] * tt
       pz = tgt.pos[2] + hz + (tgt.vel[2] ?? 0) * tt * 0.5
@@ -268,12 +262,13 @@ class Brain {
     const kinds = slots.map((w) => (w ? w.kind : null))
     const has = (k: string) => kinds.includes(k as never)
     const hpFrac = me.hp / me.max_hp
+    // after a fight, let HP regenerate (5 s without dealing damage) before shooting drones or crates
+    const healing = hpFrac < 0.85
 
     // ---- bookkeeping ----
     for (const ev of obs.events) {
       if (ev.type === "damaged") {
         if (ev.weapon !== "zone") this.lastDamageT = t
-        if (ev.weapon !== "zone") this.dmgLog.push({ t, by: ev.by ?? null, amt: ev.amount })
         if (ev.bearing != null && ev.weapon !== "zone") {
           this.threatBearing = ev.bearing
           this.threatT = t
@@ -325,18 +320,6 @@ class Brain {
     this.targetId = target ? target.id : -1
     if (V.regen) {
       if (hpFrac < 0.45) this.retreatMode = true
-      // danger: outnumbered, or losing HP fast enough to die within ~4 s
-      while (this.dmgLog.length && this.dmgLog[0].t < t - 4) this.dmgLog.shift()
-      const attackers = new Set(this.dmgLog.filter((d) => d.by != null && d.by < 16).map((d) => d.by)).size
-      const dps = this.dmgLog.filter((d) => d.t >= t - 2).reduce((a, d) => a + d.amt, 0) / 2
-      let aimingAtMe = 0
-      for (const e of enemies) {
-        const d = hyp2(pos, e.pos)
-        if (d > 160) continue
-        const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
-        if (Math.abs(wrap(toMe - e.aim[0])) < Math.max(0.06, Math.atan2(4, d)) && losTo(e)) aimingAtMe++
-      }
-      if (attackers >= 2 || aimingAtMe >= 2 || (dps > 0 && me.hp / dps < 4)) this.dangerUntil = t + 2.5
       if (hpFrac > 0.85) this.retreatMode = false
     }
     const tDist = target ? hyp2(pos, target.pos) : Infinity
@@ -366,7 +349,7 @@ class Brain {
       let bn: ActorObs | null = null, bd = Infinity
       for (const n of npcs) {
         const d = hyp2(pos, n.pos)
-        if (d < (V.grow ? 110 : 70) && d < bd && hpFrac > 0.45 && !this.retreatMode && losTo(n)) { bd = d; bn = n }
+        if (d < (V.grow ? 110 : 70) && d < bd && !healing && !this.retreatMode && losTo(n)) { bd = d; bn = n }
       }
       if (bn) { shootAt = bn; farming = true }
     }
@@ -413,9 +396,7 @@ class Brain {
         const w = slots[mortarIdx]!
         const tp: V = [shootAt.pos[0], shootAt.pos[1], shootAt.pos[2] + 1]
         const sol = this.mortarAim(me, tp, shootAt.vel, !tLos)
-        const tSpeed = Math.hypot(shootAt.vel[0], shootAt.vel[1])
-        const mortarGood = !tLos || tSpeed < 3 || shootAt.charging === true
-        if (sol && mortarGood && (w.cooldown ?? 0) <= 0.05) {
+        if (sol && (w.cooldown ?? 0) <= 0.05) {
           // mortar takes over aim only if gun not usable
           const gunBusy = gunIdx < 0 || (slots[gunIdx]!.reload ?? 0) > 0 || !tLos
           if (gunBusy || (w.cooldown ?? 0) <= 0.0) {
@@ -432,7 +413,7 @@ class Brain {
     }
 
     // crates when idle
-    if (!shootAt && !this.retreatMode) {
+    if (!shootAt && !this.retreatMode && !healing) {
       let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
       for (const c of obs.crates) {
         const d = hyp2(pos, c.pos)
@@ -470,17 +451,17 @@ class Brain {
     let retreating = target != null && (hpFrac < 0.3 || (hpFrac < 0.45 && (target.hp ?? 0) > me.hp * 1.3))
     if (V.regen && target) {
       // heal behind cover, unless the enemy is nearly dead and in our sights
-      retreating = (this.retreatMode || t < this.dangerUntil) && !(tLos && (target.hp ?? 1400) < me.hp * 0.4)
+      retreating = this.retreatMode && !(tLos && (target.hp ?? 1400) < me.hp * 0.5)
       // regen needs 5 s without dealing damage: hold fire unless we are in contact
       if (retreating && !tLos) { fire[0] = false; fire[1] = false }
     }
     if (target) {
       this.mode = retreating ? "retreat" : "fight"
       // preferred range depends on weapons
-      // kills happen at ~45 m (recorded matches); lightning reaches 45 m
-      let want = 45
-      if (lightIdx >= 0 && me.energy > 25) want = 32
-      else if (laserIdx >= 0) want = 60
+      let want = 70
+      if (lightIdx >= 0 && me.energy > 25) want = 26
+      else if (laserIdx >= 0) want = 95
+      else if (mortarIdx >= 0) want = 85
       if (retreating) want = 400
       const [rx, ry] = norm2(target.pos[0] - pos[0], target.pos[1] - pos[1])
       let radial = 0
@@ -498,16 +479,7 @@ class Brain {
       if (!tLos && !retreating && tDist > 20) {
         mv = this.navTo(obs, pos, target.pos, 4)
       }
-      // duck behind nearby cover while the gun reloads and nothing else can fire
-      const gunW = gunIdx >= 0 ? slots[gunIdx]! : null
-      const laserReady = laserIdx >= 0 && (slots[laserIdx]!.cooldown ?? 0) < 0.6
-      const lightReady = lightIdx >= 0 && tDist < 45 && me.energy > 15
-      if (!retreating && tLos && tDist < 100 && gunW != null && (gunW.reload ?? 0) > 0.6 && !laserReady && !lightReady)
-        this.duckUntil = t + (gunW.reload ?? 0) - 0.2
-      const reloadDuck = !retreating && t < this.duckUntil
-      const cover = retreating && V.regen ? this.coverPoint(obs, pos, target)
-        : reloadDuck ? this.coverPoint(obs, pos, target, 18) : null
-      if (reloadDuck && cover) this.mode = "duck"
+      const cover = retreating && V.regen ? this.coverPoint(obs, pos, target) : null
       if (cover) {
         mv = this.navTo(obs, pos, cover, 1.5)
         boost = me.energy > 15 && hyp2(pos, cover) > 6
