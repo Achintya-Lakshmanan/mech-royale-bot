@@ -449,6 +449,26 @@ class Bot:
             if math.dist(p[:2], pos[:2]) < 28 and abs(p[2] - pos[2]) < 14 and w.los(eye, (p[0], p[1], p[2] + 1.0)):
                 del self.known_picks[pid]
 
+    # --- magazine-aware finishing --------------------------------------------------------------
+    def _burst(self, me, d):
+        """Damage we can put out in the next ~2 s at distance d: the gun's live magazine at a realistic hit rate,
+        a ready (or charging) laser shot, and lightning energy. Scaled by our cubes."""
+        cc = self.cfg.get("cubes", {})
+        scale = 1 + cc.get("damage_per_cube", 0.04) * min(me.get("cubes", 0), cc.get("stat_cap", 10))
+        b = 0.0
+        for w in me["weapons"]:
+            if not w:
+                continue
+            st = w.get("stats", {})
+            if w["kind"] == "gun" and w.get("reload", 0) <= 0 and d < st.get("range", 230):
+                hit = 0.8 if d < 50 else (0.6 if d < 100 else 0.35)
+                b += min(w.get("ammo", 0), 9) * st.get("damage", 45) * hit
+            elif w["kind"] == "laser" and (w.get("cooldown", 0) < 0.8 or w.get("charge", 0) > 0) and d < st.get("range", 280):
+                b += st.get("damage", 315)
+            elif w["kind"] == "lightning" and d < st.get("range", 45):
+                b += min(8, int(me["energy"] // max(1, st.get("energy", 3)))) * st.get("damage", 60)
+        return b * scale
+
     # --- free-for-all etiquette ----------------------------------------------------------------
     def _engage_ok(self, obs, me, target, t):
         """Should we open fire on this target? In a free-for-all every death before ours is worth the same,
@@ -766,6 +786,8 @@ class Bot:
             s = e["d"] + 0.2 * m["hp"]
             if m["hp"] <= 0.3 * m["max_hp"]:
                 s -= 100
+            if e["shoot"] and m["hp"] <= self._burst(me, e["d"]):
+                s -= 150  # our current burst can kill it: finish it
             if not e["shoot"]:
                 s += 400
             if m["id"] == self.target_id:
@@ -906,7 +928,8 @@ class Bot:
                 if want_cube is None or d < want_cube[0]:
                     want_cube = (d, c["pos"])
         real_threats = [e for e in threats if not e.get("pseudo")]
-        finishing = bool(target and target["shoot"] and target["m"]["hp"] <= 0.3 * target["m"]["max_hp"]
+        finishing = bool(target and target["shoot"]
+                         and (target["m"]["hp"] <= 0.3 * target["m"]["max_hp"] or target["m"]["hp"] <= self._burst(me, target["d"]))
                          and target["d"] < 130 and hp_frac > 0.3 and len(real_threats) <= 2)
 
         # ---- movement decision
