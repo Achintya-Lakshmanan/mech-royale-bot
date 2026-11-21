@@ -106,6 +106,7 @@ class Brain {
   peekT = -99
   /** free-for-all detected (practice house bots never kill each other): switch to the hiding, ghost behaviour */
   ffa = false
+  huntLog = false
   kills = 0
   /** NPC drones that shot us recently: id -> time */
   droneAttackers = new Map<number, number>()
@@ -431,8 +432,22 @@ class Brain {
       // a remembered pickup close by that we no longer see has been taken
       for (const [id, p] of this.knownPickups) if (!vis.has(id) && hyp2(pos, p.pos) < 25) this.knownPickups.delete(id)
     }
-    // more mechs died than we killed (plus one for zone or drone deaths): the others are fighting each other
-    if (!this.ffa && (this.cfg.match.mechs ?? 16) - obs.alive > this.kills + 1) this.ffa = true
+    // practice or free-for-all? In practice the house bots never fight each other, so any death we did not cause,
+    // or any beam from one mech that lands on another, means free-for-all (in recorded free-for-alls 90% show a
+    // death by 15-20 s). Until 20 s play the safe opening; then hunt if it still looks like practice.
+    if (!this.ffa && (this.cfg.match.mechs ?? 16) - obs.alive > this.kills) this.ffa = true
+    if (!this.ffa) {
+      for (const b of obs.beams ?? []) {
+        if (b.by === me.id || !b.path || b.path.length < 2) continue
+        const end = b.path[1]
+        for (const m of obs.mechs) {
+          if (m.kind !== "mech" || m.id === b.by || hyp2(pos, m.pos) < 15) continue
+          if (Math.hypot(end[0] - m.pos[0], end[1] - m.pos[1]) < 4 && end[2] > m.pos[2] - 1 && end[2] < m.pos[2] + 11) this.ffa = true
+        }
+      }
+    }
+    const hunt = !this.ffa && t > 20
+    if (hunt !== this.huntLog) { this.huntLog = hunt; console.error(`t=${t.toFixed(1)} hunt=${hunt} ffa=${this.ffa} alive=${obs.alive} kills=${this.kills}`) }
     this.posHist.push({ t, p: pos.slice() })
     while (this.posHist.length && this.posHist[0].t < t - 1.2) this.posHist.shift()
 
@@ -487,7 +502,7 @@ class Brain {
         const toMe0 = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
         const aimedAtMe = Math.abs(wrap(toMe0 - e.aim[0])) < 0.25
         // ambush: let hunters come to us; engage only inside 70 m or when they open fire
-        if (!(attacking || d < 70 || (e.charging && aimedAtMe && d < 120))) continue
+        if (hunt ? d > 240 : !(attacking || d < 70 || (e.charging && aimedAtMe && d < 120))) continue
       }
       const visible = losTo(e)
       let s = d + (e.hp ?? 1400) * 0.12 - (visible ? 40 : 0)
@@ -496,6 +511,10 @@ class Brain {
       // is it aiming at us?
       const toMe = Math.atan2(pos[1] - e.pos[1], pos[0] - e.pos[0])
       if (Math.abs(wrap(toMe - e.aim[0])) < 0.3) s -= 20
+      if (hunt) {
+        s -= (1 - (e.hp ?? 1400) / (e.max_hp ?? 1400)) * 150 // finish the hurt ones
+        if (Math.abs(wrap(toMe - e.aim[0])) > Math.PI / 2 + 0.1) s -= 40 // its back is to us: x1.5 damage
+      }
       if (s < bestScore) { bestScore = s; target = e }
     }
     this.targetId = target ? target.id : -1
@@ -711,7 +730,7 @@ class Brain {
         if (c) { mv = this.navTo(obs, pos, c, 1.0); boost = me.energy > 10; this.mode = "break-los" }
       }
       // fight position: with more than one hostile around, fight from a spot only our target can see
-      if (!retreating && tLos) {
+      if (!retreating && tLos && !hunt) {
         const others = enemies.filter((e) => e.id !== target.id && hyp2(pos, e.pos) < 200)
         const spot = this.peekSpot(obs, pos, target, others)
         if (spot && hyp2(pos, spot) > 2) { mv = this.navTo(obs, pos, spot, 1.0); this.mode = "peek" }
@@ -797,7 +816,7 @@ class Brain {
         if (bc) { goal = [bc.pos[0], bc.pos[1]]; this.mode = "cube" }
       }
       // grow: walk to visible crates to break them
-      if (V.grow && !goal && !shootAt && !this.retreatMode && this.mode !== "capture") {
+      if ((V.grow || hunt) && !goal && !shootAt && !this.retreatMode && this.mode !== "capture") {
         let bc: (typeof obs.crates)[number] | null = null, bd = Infinity
         for (const c of obs.crates) {
           const d = hyp2(pos, c.pos)
@@ -811,6 +830,14 @@ class Brain {
         const want = lightIdx >= 0 ? 25 : 40
         if (d > want) goal = [shootAt.pos[0], shootAt.pos[1]]
         this.mode = "farm"
+      }
+      if (hunt && !goal && this.mode !== "capture" && !this.retreatMode && !healing) {
+        let best: number[] | null = null, bd = Infinity
+        for (const { t: ts, m } of this.lastSeen.values()) {
+          const d = hyp2(pos, m.pos)
+          if (t - ts < 15 && d < bd && this.zoneSafe(obs, m.pos, 5)) { bd = d; best = m.pos }
+        }
+        if (best && bd > 30) { goal = [best[0], best[1]]; this.mode = "hunt" }
       }
       if (!goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
         const hg = this.homeGoal(obs, pos)
@@ -941,7 +968,7 @@ class Brain {
     act.aim = [wrap(aimYaw), clamp(aimPitch, this.cfg.mech.min_pitch ?? -0.7, this.cfg.mech.max_pitch ?? 1.3)]
     act.fire = fire
 
-    draw.label(`${this.ffa ? "ffa " : ""}${this.mode} hp${Math.round(me.hp)} e${Math.round(me.energy)} ${target ? "T" + target.id : ""}`)
+    draw.label(`${this.ffa ? "ffa " : hunt ? "hunt " : ""}${this.mode} hp${Math.round(me.hp)} e${Math.round(me.energy)} ${target ? "T" + target.id : ""}`)
     return act
   }
 }
