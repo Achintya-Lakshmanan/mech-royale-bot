@@ -18,7 +18,7 @@ from array import array
 import mechfight as mf
 
 TAU = 2 * math.pi
-FLAGS = set(x for x in os.environ.get("MR_FLAGS", "sneak,jink").split(",") if x)  # strategy switches (env MR_FLAGS overrides; dev only)
+FLAGS = set(x for x in os.environ.get("MR_FLAGS", "sneak").split(",") if x)  # strategy switches (env MR_FLAGS overrides; dev only)
 WANT_KINDS = ("laser", "lightning")
 UPGRADE_PRIORITY = [
     "plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_rate",
@@ -378,8 +378,6 @@ class Bot:
         self.known_picks = {}    # id -> (kind, pos)
         self.dodge_side = {}     # enemy id -> +1/-1 side we sidestep to
         self.last_kill_t = -99.0
-        self.kills = 0
-        self.ffa = False  # set once more mechs have died than we killed (+1): the house squad never kills itself
         self.mortar_g = cfg["weapons"]["mortar"].get("gravity", 22.0)
 
     def _late(self, ms):
@@ -683,13 +681,9 @@ class Bot:
                 self.dmg_log.append((t, e.get("amount", 0), e["by"], e.get("bearing"), bool(e.get("rear"))))
             elif e["type"] == "kill":
                 self.last_kill_t = t
-                self.kills += 1
             elif e["type"] in ("took", "take_failed"):
                 self.known_picks.pop(e.get("id"), None)
         self.dmg_log = [d for d in self.dmg_log if t - d[0] < 2.5]
-        if not self.ffa and 16 - obs["alive"] > self.kills + 1:
-            self.ffa = True
-            self.flags.add("patient")  # free-for-all: pick only cheap fights (practice is unaffected)
         dps_in = sum(d[1] for d in self.dmg_log) / 2.5
         for s in obs["sounds"]:
             if s["kind"] in SOUND_THREAT and s["dist"] != "far":
