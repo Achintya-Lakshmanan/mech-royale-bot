@@ -85,6 +85,7 @@ class Brain {
   pathGoal: number[] | null = null
   pathIdx = 0
   pathTime = -99
+  planTick = -1
   posHist: { t: number; p: V }[] = []
   stuckUntil = 0
   stuckDir: [number, number] = [0, 0]
@@ -297,7 +298,9 @@ class Brain {
       hyp2(this.pathGoal, goal) > 8 ||
       obs.t - this.pathTime > 4 ||
       this.pathIdx >= this.path.length
+    if (replan && this.planTick === obs.tick) return norm2(goal[0] - me[0], goal[1] - me[1]) // at most one A* search per tick (50 ms budget)
     if (replan) {
+      this.planTick = obs.tick
       this.path = this.map.path(me[0], me[1], goal[0], goal[1], 40000)
       this.pathGoal = goal.slice()
       this.pathTime = obs.t
@@ -711,7 +714,7 @@ class Brain {
     if (gunIdx >= 0) {
       const w = slots[gunIdx]!
       const mag = (w.stats as Record<string, number>).mag ?? 12
-      if ((w.reload ?? 0) <= 0 && (w.ammo ?? mag) < mag * 0.5 && !target && !fire[gunIdx]) act.reload = true
+      if ((w.reload ?? 0) <= 0 && (w.ammo ?? mag) < mag * 0.5 && (!target || !tLos) && !fire[gunIdx]) act.reload = true
     }
 
     // ---- movement ----
@@ -780,6 +783,13 @@ class Brain {
           mv = this.navTo(obs, pos, bp.pos, 1.0)
           this.mode = "loot " + bp.kind
           if (hyp2(pos, bp.pos) < (this.cfg.loot.pickup_radius ?? 4) - 0.6 && Math.abs(bp.pos[2] - pos[2]) < 3.5) act.take = bp.id
+        }
+      }
+      // pick up cubes within 25 m mid-fight (kills drop the victim's cubes plus two)
+      if (!retreating) for (const c of obs.cubes) {
+        if (hyp2(pos, c.pos) < 25 && c.pos[2] - this.map.ground(c.pos[0], c.pos[1]) < 3 && this.zoneSafe(obs, c.pos, 5)) {
+          const [cx, cy] = norm2(c.pos[0] - pos[0], c.pos[1] - pos[1])
+          mv = norm2(mv[0] * 0.4 + cx, mv[1] * 0.4 + cy); this.mode = "fight+cube"; break
         }
       }
       if (outgunned && !retreating && tDist > 45 && me.energy > 30) boost = true
