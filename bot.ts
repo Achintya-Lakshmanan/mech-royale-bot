@@ -101,6 +101,9 @@ class Brain {
   scanPhase = 0
   mode = ""
   retreatMode = false
+  /** rooftop sniping: the roof we are going to (or standing on) and where to start the climb */
+  roof: { x: number; y: number; top: number; ax: number; ay: number } | null = null
+  roofT = -99
   peekGoal: number[] | null = null
   peekT = -99
   /** free-for-all detected (practice house bots never kill each other): switch to the hiding, ghost behaviour */
@@ -277,6 +280,40 @@ class Brain {
     this.peekGoal = best && bs < 100 ? best : null // only if it hides us from every other hostile
     this.peekT = obs.t
     return this.peekGoal
+  }
+
+  /** a flat roof 8-45 m up inside the safe zone, near us, and the walkable spot next to it to climb from */
+  findRoof(obs: Observation, pos: V) {
+    const m = this.map as any
+    if (!this.map.ok || !m.solidTop) return null
+    let best: { x: number; y: number; top: number; ax: number; ay: number } | null = null, bs = Infinity
+    for (let dx = -160; dx <= 160; dx += 6) {
+      for (let dy = -160; dy <= 160; dy += 6) {
+        const x = pos[0] + dx, y = pos[1] + dy
+        const d = Math.hypot(dx, dy)
+        if (d > 160) continue
+        const k = this.map.idx(x, y)
+        if (k < 0) continue
+        const top = m.solidTop[k], gz = this.map.ground(x, y), h = top - gz
+        if (h < 8 || h > 45) continue
+        // flat enough to stand on: the roof continues 4 m out in every direction
+        let flat = true
+        for (const [ox, oy] of [[4, 0], [-4, 0], [0, 4], [0, -4]]) {
+          const k2 = this.map.idx(x + ox, y + oy)
+          if (k2 < 0 || Math.abs(m.solidTop[k2] - top) > 0.8) { flat = false; break }
+        }
+        if (!flat || !this.zoneSafe(obs, [x, y], 30)) continue
+        const sc = d + h * 1.5
+        if (sc >= bs) continue
+        const a = this.map.nearestFree(x, y, 2, 15)
+        if (a < 0) continue
+        const ax = this.map.cx(a % this.map.gw), ay = this.map.cy(Math.floor(a / this.map.gw))
+        if (Math.hypot(ax - x, ay - y) > 30) continue
+        bs = sc
+        best = { x, y, top, ax, ay }
+      }
+    }
+    return best
   }
 
   // ---------- navigation ----------
@@ -842,8 +879,38 @@ class Brain {
         if (l > quiet) mv = [(mv[0] / l) * quiet, (mv[1] / l) * quiet]
       }
     }
+    // ---- rooftop sniper (practice): with a laser, climb a nearby roof inside the zone and shoot from there ----
+    let onRoof = false
+    if (!this.ffa && laserIdx >= 0 && t > 15 && (zoneOk || me.in_zone)) {
+      if (!this.roof || t - this.roofT > 20 || !this.zoneSafe(obs, [this.roof.x, this.roof.y], 20)) {
+        this.roof = this.findRoof(obs, pos)
+        this.roofT = t
+      }
+      const r = this.roof
+      if (r) {
+        onRoof = pos[2] > r.top - 1.5 && hyp2(pos, [r.x, r.y]) < 18
+        if (onRoof) {
+          mv = hyp2(pos, [r.x, r.y]) > 3 ? norm2(r.x - pos[0], r.y - pos[1]) : [0, 0]
+          boost = false; jump = false
+          this.mode = "roof " + this.mode
+        } else if (hyp2(pos, [r.ax, r.ay]) > 6) {
+          mv = this.navTo(obs, pos, [r.ax, r.ay], 2)
+          this.mode = "to-roof"
+        } else if (me.energy > (r.top - pos[2]) * 1.6 + 10 || !me.grounded) {
+          // climb: jump, then jet up while pushing toward the roof
+          mv = norm2(r.x - pos[0], r.y - pos[1])
+          jump = me.grounded
+          boost = !me.grounded && pos[2] < r.top + 2
+          this.mode = "climb"
+        } else {
+          mv = [0, 0]
+          this.mode = "wait-energy"
+        }
+      }
+    }
+    const roofing = this.mode.startsWith("roof") || this.mode === "climb"
     // dodge: sidestep bullets about to hit, leave mortar landing spots, step off a charging laser's line
-    {
+    if (!roofing) {
       let dx = 0, dy = 0, urgent = false
       const sc = 1 + 0.05 * (me.cubes ?? 0)
       const cz = pos[2] + 4.5 * sc
@@ -894,11 +961,11 @@ class Brain {
         }
       }
     }
-    mv = this.wallSafe(pos, mv)
+    if (!roofing) mv = this.wallSafe(pos, mv)
 
     // ---- stuck handling ----
     const moving = Math.hypot(mv[0], mv[1]) > 0.3
-    if (moving && this.posHist.length > 8 && t > this.stuckUntil) {
+    if (moving && !roofing && this.posHist.length > 8 && t > this.stuckUntil) {
       const old = this.posHist[0]
       if (t - old.t > 0.9 && hyp2(old.p, pos) < 1.2) {
         this.stuckUntil = t + 1.2
