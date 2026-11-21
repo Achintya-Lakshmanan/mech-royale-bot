@@ -54,7 +54,7 @@ const V = { regen: true, grow: false }
 const WEAPON_RANK: Record<string, number> = { lightning: 2.8, laser: 3.2, mortar: -1, gun: 0 }
 const UPGRADE_RANK = [
   // survival first (as the 4.1+ bots do), then damage
-  "laser_damage", "plating", "laser_charge", "armor", "lightning_efficiency", "nanites", "gun_damage", "gun_rate",
+  "plating", "armor", "nanites", "laser_damage", "gun_damage", "gun_rate", "laser_charge", "lightning_efficiency",
   "gyros", "lightning_range", "gun_mag", "capacitor", "reactor", "servos", "sensors", "gun_velocity",
   "jets", "mortar_reload", "lightning_chain", "mortar_splash", "mortar_velocity", "laser_pierce",
 ]
