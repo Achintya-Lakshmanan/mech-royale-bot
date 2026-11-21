@@ -1,6 +1,35 @@
 /** Mech Royale bot: zone-aware navigation, looting, and a kiting gunfight with weapon-specific aiming. */
 import { type Action, type ActorObs, draw, type Hello, type Observation, run } from "./mechfight.ts"
 import { GameMap } from "./map.ts"
+import { existsSync, readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+
+/** precomputed exposure map (tools/mkexposure.ts): how many nearby ground spots can see a mech at each 4 m cell */
+class Exposure {
+  ox = 0; oy = 0; nx = 0; ny = 0; C = 4
+  data: Uint8Array | null = null
+  constructor() {
+    try {
+      const f = join(dirname(fileURLToPath(import.meta.url)), "exposure.bin")
+      if (!existsSync(f)) return
+      const b = readFileSync(f)
+      const h = new Int32Array(b.buffer.slice(b.byteOffset, b.byteOffset + 20))
+      ;[this.ox, this.oy, this.nx, this.ny, this.C] = [h[0], h[1], h[2], h[3], h[4]]
+      this.data = new Uint8Array(b.buffer.slice(b.byteOffset + 20, b.byteOffset + 20 + this.nx * this.ny))
+    } catch (e) {
+      process.stderr.write(`exposure load failed: ${e}\n`)
+    }
+  }
+  /** 0 (hidden) .. 1 (exposed); 1 for unwalkable or unknown */
+  at(x: number, y: number): number {
+    if (!this.data) return 0.5
+    const i = Math.floor((x - this.ox) / this.C), j = Math.floor((y - this.oy) / this.C)
+    if (i < 0 || j < 0 || i >= this.nx || j >= this.ny) return 1
+    const v = this.data[j * this.nx + i]
+    return v === 255 ? 1 : v / 254
+  }
+}
 
 type V = number[]
 const TAU = Math.PI * 2
@@ -42,6 +71,10 @@ class Brain {
   name = "steelhead"
   cfg: Hello["config"]
   map: GameMap
+  expo = new Exposure()
+  home: number[] | null = null
+  homeScore = Infinity
+  homeT = -99
   rand: () => number
   // navigation state
   path: number[][] | null = null
@@ -86,7 +119,7 @@ class Brain {
         this.map.walkLine(a[0], a[1], b[0], b[1])
       }
     }
-    process.stderr.write(`map ${this.map.ok} in ${(performance.now() - t0).toFixed(0)}ms\n`)
+    process.stderr.write(`exposure ${this.expo.data ? "ok" : "missing"}; map ${this.map.ok} in ${(performance.now() - t0).toFixed(0)}ms\n`)
   }
 
   // ---------- zone helpers ----------
@@ -168,6 +201,43 @@ class Brain {
       if (sc > bs) { bs = sc; bp = p }
     }
     return bp
+  }
+
+  /**
+   * cost of standing at (x, y). Weights come from the danger map of 41 recorded matches: damage taken per second is
+   * 34 at the zone centre vs 14.5 near its edge, and 15 with no mech within 60 m vs 70 with one; exposure barely mattered.
+   */
+  homeCost(obs: Observation, pos: V, x: number, y: number): number {
+    let crowd = 0
+    for (const { t, m } of this.lastSeen.values())
+      if (obs.t - t < 20) crowd += 1.5 * Math.max(0, 80 - Math.hypot(m.pos[0] - x, m.pos[1] - y)) / 80
+    for (const d of obs.drops ?? []) crowd += Math.max(0, 60 - Math.hypot(d.pos[0] - x, d.pos[1] - y)) / 60
+    for (const n of obs.mechs) if (n.kind === "npc") crowd += Math.max(0, 50 - Math.hypot(n.pos[0] - x, n.pos[1] - y)) / 50
+    const z = obs.zone
+    const edge = Math.hypot(x - z.next_center[0], y - z.next_center[1]) / Math.max(30, z.next_radius)
+    // prefer the outer ring of the next circle (edge ~0.75); the centre is where everyone meets
+    return 50 * this.expo.at(x, y) + 0.25 * Math.hypot(x - pos[0], y - pos[1]) + 40 * crowd + 60 * Math.max(0, 0.75 - edge)
+  }
+
+  /** a hidden ground spot inside the next circle to wait at; re-picked every few seconds with hysteresis */
+  homeGoal(obs: Observation, pos: V): number[] | null {
+    if (!this.map.ok || !this.expo.data) return null
+    const z = obs.zone
+    const valid = (h: number[] | null) => h != null && this.zoneSafe(obs, h, 12)
+    if (valid(this.home) && obs.t - this.homeT < 4) return this.home
+    let best: number[] | null = null, bs = Infinity
+    for (let k = 0; k < 90; k++) {
+      const a = this.rand() * Math.PI * 2, r = Math.sqrt(this.rand()) * Math.max(0, z.next_radius) * 0.85
+      const x = z.next_center[0] + Math.cos(a) * r, y = z.next_center[1] + Math.sin(a) * r
+      if (this.map.clearAt(x, y) < 3) continue
+      const c = this.homeCost(obs, pos, x, y)
+      if (c < bs) { bs = c; best = [x, y] }
+    }
+    const cur = valid(this.home) ? this.homeCost(obs, pos, this.home![0], this.home![1]) : Infinity
+    if (best && (cur === Infinity || bs < cur - 15)) this.home = best
+    else if (cur === Infinity) this.home = null
+    this.homeT = obs.t
+    return this.home
   }
 
   // ---------- navigation ----------
@@ -565,7 +635,7 @@ class Brain {
       let goal: number[] | null = null
       this.mode = "roam"
       if (!zoneOk) {
-        goal = this.zoneGoal(obs, pos)
+        goal = this.homeGoal(obs, pos) ?? this.zoneGoal(obs, pos)
         this.mode = "zone"
         if (!inZoneNow) boost = me.energy > 10
       }
@@ -625,8 +695,10 @@ class Brain {
         this.mode = "farm"
       }
       if (!goal && this.mode !== "capture" && !(this.crateTarget >= 0 && fire.some((f) => f))) {
-        goal = this.zoneGoal(obs, pos)
-        if (hyp2(pos, goal) < 25) goal = null
+        const hg = this.homeGoal(obs, pos)
+        goal = hg ?? this.zoneGoal(obs, pos)
+        if (hyp2(pos, goal) < (hg ? 2.5 : 25)) goal = null
+        if (hg) this.mode = goal ? "home" : "hold"
       }
       this.crateTarget = -1
       if (goal) mv = this.navTo(obs, pos, goal, 1.0)
