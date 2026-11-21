@@ -433,8 +433,8 @@ class Brain {
       for (const [id, p] of this.knownPickups) if (!vis.has(id) && hyp2(pos, p.pos) < 25) this.knownPickups.delete(id)
     }
     // practice or free-for-all? In practice the house bots never fight each other, so any death we did not cause,
-    // or any beam from one mech that lands on another, means free-for-all (in recorded free-for-alls 90% show a
-    // death by 15-20 s). Until 20 s play the safe opening; then hunt if it still looks like practice.
+    // or any beam from one mech that lands on another, means free-for-all (in recorded free-for-alls 88-98% show a
+    // mech death by 30 s). Until 30 s play the safe opening; then hunt if it still looks like practice.
     if (!this.ffa && (this.cfg.match.mechs ?? 16) - obs.alive > this.kills) this.ffa = true
     if (!this.ffa) {
       for (const b of obs.beams ?? []) {
@@ -446,7 +446,7 @@ class Brain {
         }
       }
     }
-    const hunt = !this.ffa && t > 20
+    const hunt = !this.ffa && t > 30
     if (hunt !== this.huntLog) { this.huntLog = hunt; console.error(`t=${t.toFixed(1)} hunt=${hunt} ffa=${this.ffa} alive=${obs.alive} kills=${this.kills}`) }
     this.posHist.push({ t, p: pos.slice() })
     while (this.posHist.length && this.posHist[0].t < t - 1.2) this.posHist.shift()
