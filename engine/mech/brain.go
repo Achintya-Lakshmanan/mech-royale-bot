@@ -1959,7 +1959,7 @@ func squadParams(p Params) Params {
 	p.Stick = 120
 	p.HPw = 0.2
 	p.LowBonus = 100
-	p.MaxTarget = 240
+	p.MaxTarget = 260
 	p.LoseRule = true
 	p.FightLoot = 70
 	p.FarmHP = 0.5
