@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-const lat = 0.075
+const lat = 0.085
 
 type Track struct {
 	MechSeen
