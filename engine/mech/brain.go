@@ -974,7 +974,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 		}
 		haveAim = true
 		tolY := math.Atan2(tr*0.75, math.Max(dist, 1))
-		tolP := math.Atan2(th*0.4, math.Max(dist, 1))
+		tolP := math.Atan2(th*0.6, math.Max(dist, 1))
 		slew := func(wantY, wantP float64) bool {
 			ey := math.Max(0, math.Abs(angDiff(wantY, me.Aim[0]))-st.TurnRate*0.05)
 			ep := math.Max(0, math.Abs(wantP-me.Aim[1])-st.PitchRate*0.05)
